@@ -17,10 +17,10 @@ unify Japan against three strengths of AI.
 ## ▶️ Play it
 
 ### Option 1 — Play in your browser (no download)
-👉 **https://kc-hansen.github.io/sengoku-way-of-the-sword/**
+👉 **https://kc-hansen.github.io/sword/**
 
 ### Option 2 — Download for Windows
-1. Go to the [**Releases**](https://github.com/kc-hansen/sengoku-way-of-the-sword/releases/latest) page.
+1. Go to the [**Releases**](https://github.com/kc-hansen/sword/releases/latest) page.
 2. Download `Sengoku-Windows.zip`.
 3. Unzip it and double-click **`Sengoku.exe`**. That's it — no install needed.
 
