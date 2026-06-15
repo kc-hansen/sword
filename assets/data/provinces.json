@@ -1,0 +1,29 @@
+{
+  "_comment": "Prototype province set (16) for the interactive map. Full 68-province authoring tracked in the Province Map GDD. Coordinates are in a 0..460 x 0..372 design space; main.gd scales to the viewport. owner = clan id (A-E) or null.",
+  "provinces": {
+    "ezo_n":     {"name": "Ezo-Kita",    "points": [[360,18],[432,28],[426,72],[364,66]],   "centroid": [396,44],  "owner": null, "army": 2, "castle": 0, "adj": ["ezo_s"]},
+    "ezo_s":     {"name": "Ezo-Minami",  "points": [[362,70],[426,74],[416,116],[356,110]], "centroid": [390,93],  "owner": null, "army": 1, "castle": 0, "adj": ["ezo_n","mutsu"]},
+    "mutsu":     {"name": "Mutsu",       "points": [[300,108],[360,120],[350,160],[294,150]], "centroid": [326,135], "owner": "B", "army": 6, "castle": 1, "adj": ["ezo_s","dewa","echigo","kanto"]},
+    "dewa":      {"name": "Dewa",        "points": [[256,128],[300,108],[294,150],[252,166]], "centroid": [276,140], "owner": "B", "army": 3, "castle": 0, "adj": ["mutsu","echigo"]},
+    "echigo":    {"name": "Echigo",      "points": [[248,164],[294,150],[288,192],[244,202]], "centroid": [268,177], "owner": "B", "army": 4, "castle": 0, "adj": ["mutsu","dewa","kanto","shinano"]},
+    "kanto":     {"name": "Kanto",       "points": [[298,150],[350,160],[344,206],[294,196]], "centroid": [321,178], "owner": "A", "army": 8, "castle": 2, "adj": ["mutsu","echigo","shinano","tokai"]},
+    "shinano":   {"name": "Shinano",     "points": [[262,194],[304,190],[298,228],[260,230]], "centroid": [281,210], "owner": "A", "army": 3, "castle": 0, "adj": ["echigo","kanto","tokai","kinai"]},
+    "tokai":     {"name": "Tokai",       "points": [[300,196],[344,206],[338,242],[296,234]], "centroid": [319,219], "owner": "A", "army": 5, "castle": 1, "adj": ["kanto","shinano","kinai"]},
+    "kinai":     {"name": "Kinai",       "points": [[228,224],[270,220],[264,260],[226,256]], "centroid": [247,240], "owner": "C", "army": 7, "castle": 2, "adj": ["shinano","tokai","chugoku_e","awa"]},
+    "chugoku_e": {"name": "Harima",      "points": [[188,234],[228,226],[224,266],[186,262]], "centroid": [206,247], "owner": "C", "army": 3, "castle": 0, "adj": ["kinai","chugoku_w","awa"]},
+    "chugoku_w": {"name": "Nagato",      "points": [[148,244],[188,236],[184,274],[146,270]], "centroid": [166,256], "owner": "D", "army": 4, "castle": 1, "adj": ["chugoku_e","tosa","buzen"]},
+    "awa":       {"name": "Awa",         "points": [[208,274],[246,270],[242,300],[206,298]], "centroid": [225,286], "owner": "E", "army": 3, "castle": 0, "adj": ["kinai","chugoku_e","tosa"]},
+    "tosa":      {"name": "Tosa",        "points": [[170,282],[208,278],[204,306],[168,302]], "centroid": [187,293], "owner": "E", "army": 2, "castle": 1, "adj": ["awa","chugoku_w"]},
+    "buzen":     {"name": "Buzen",       "points": [[118,274],[152,270],[150,300],[116,300]], "centroid": [134,286], "owner": "D", "army": 3, "castle": 0, "adj": ["chugoku_w","hizen"]},
+    "hizen":     {"name": "Hizen",       "points": [[90,294],[124,290],[121,322],[88,320]],   "centroid": [106,307], "owner": "D", "army": 2, "castle": 0, "adj": ["buzen","satsuma"]},
+    "satsuma":   {"name": "Satsuma",     "points": [[98,322],[132,320],[128,350],[96,348]],   "centroid": [112,335], "owner": "D", "army": 5, "castle": 1, "adj": ["hizen"]}
+  },
+  "clans": {
+    "A": {"name": "Akagawa",    "color": [0.753, 0.224, 0.169], "tint": [0.831, 0.549, 0.459]},
+    "B": {"name": "Aoumi",      "color": [0.141, 0.443, 0.639], "tint": [0.525, 0.659, 0.694]},
+    "C": {"name": "Midoriyama", "color": [0.118, 0.518, 0.286], "tint": [0.514, 0.694, 0.518]},
+    "D": {"name": "Kinmaru",    "color": [0.831, 0.675, 0.051], "tint": [0.871, 0.773, 0.400]},
+    "E": {"name": "Murasaki",   "color": [0.490, 0.235, 0.596], "tint": [0.698, 0.553, 0.675]}
+  },
+  "player": "A"
+}

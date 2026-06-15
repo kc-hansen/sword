@@ -1,0 +1,25 @@
+; Engine configuration file — Sengoku: Way of the Sword
+; Godot 4.6 / GDScript. See CLAUDE.md and design/ for the full project.
+
+config_version=5
+
+[application]
+
+config/name="Sengoku: Way of the Sword"
+config/description="Digital remake of the Samurai Swords / Shogun board game."
+run/main_scene="res://src/main/main.tscn"
+config/features=PackedStringArray("4.6", "GL Compatibility")
+config/icon="res://icon.svg"
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/stretch/mode="canvas_items"
+window/stretch/aspect="keep"
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+environment/defaults/default_clear_color=Color(0.109804, 0.168627, 0.227451, 1)
