@@ -5,7 +5,13 @@
 This is the living growth plan: everything on the table for making Sengoku deeper, smarter,
 and more beautiful. It's roughly ordered by impact, not commitment — pick what's fun.
 
-## Where we are now (v1.1)
+## Where we are now (v1.2)
+**New in v1.2:** the map is now the **real geography of Japan** — actual coastline and province
+borders (46 provinces with Sengoku-era names), **terrain relief** (mountains/hills), **bright
+clan-coloured territories** over the land, and **zoom + pan** (scroll to zoom, right-drag to pan,
+Fit to reset) so you can read the action up close.
+
+## Where we were at (v1.1)
 A complete, playable single-player game: secret koku auction (turn-order + ninja + levy bids),
 five unit types, castles + castle-building, ronin, a shared ninja with assassinations, daimyō
 generals that lead and level up, faithful ranged→melee d12 combat, three AI strengths, a title
@@ -22,8 +28,8 @@ piece of intentional debt — see "Foundation" below.
 ---
 
 ## Phase 1 — Depth & faithfulness (toward the real board game)
-- **Full map of Japan**: expand the 16-province prototype to all ~68 historical provinces with
-  real adjacency, regions, and varied income — the single biggest "more game" upgrade.
+- ✅ **Full map of Japan** *(done v1.2)*: the real coastline + 46 historical provinces (from
+  prefecture geodata), real adjacency and regions. *(Next: finer kuni subdivisions, varied income.)*
 - ✅ **True daimyō elimination** *(done v1.1)*: lose your *last* daimyō and you're knocked out (the
   iconic rule), with their territory/units transferring to the conqueror.
 - ✅ **Fog of war + scouting** *(done v1.1)*: enemy army *composition* is hidden (totals stay visible);

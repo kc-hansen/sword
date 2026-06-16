@@ -19,11 +19,11 @@ extends Node2D
 
 const DATA_PATH := "res://assets/data/provinces.json"
 const SAVE_PATH := "user://sengoku_save.json"
-const DESIGN_W := 460.0
-const DESIGN_H := 372.0
+const DESIGN_W := 1000.0
+const DESIGN_H := 760.0
 const TOP_BAR := 56.0
 const BOTTOM_BAR := 64.0
-const WIN_PROV := 10
+const WIN_PROV := 24
 const NINJA_SUCCESS := 8
 
 enum Stage { MENU, ALLOCATE, REVEAL, WAR }
@@ -83,6 +83,22 @@ const C_GREEN := Color(0.431, 0.659, 0.361)
 const C_AMBER := Color(0.847, 0.651, 0.271)
 const C_RISK := Color(0.780, 0.318, 0.282)
 const ODDS_TRIALS := 200
+const C_SEA2 := Color(0.071, 0.118, 0.165)   # deeper sea for the vignette
+const C_INK := Color(0.094, 0.122, 0.157)    # coastline ink
+const C_BORDER := Color(0.353, 0.337, 0.286) # muted land border
+# Parchment shading per historical region, so neutral land reads by area.
+const REGION_TINT := {
+	"Kinai": Color(0.890, 0.835, 0.624),
+	"Kantō": Color(0.871, 0.812, 0.663),
+	"Tōkai": Color(0.878, 0.800, 0.651),
+	"Chūbu": Color(0.792, 0.804, 0.659),
+	"Hokuriku": Color(0.804, 0.824, 0.749),
+	"Tōhoku": Color(0.820, 0.812, 0.722),
+	"Chūgoku": Color(0.878, 0.792, 0.643),
+	"Shikoku": Color(0.855, 0.792, 0.682),
+	"Kyūshū": Color(0.886, 0.804, 0.620),
+	"Ezo": Color(0.800, 0.835, 0.816),
+}
 
 var _provinces: Dictionary = {}
 var _clans: Dictionary = {}
@@ -118,6 +134,13 @@ var _font: Font
 var _font_head: Font
 var _scale: float = 1.0
 var _offset: Vector2 = Vector2.ZERO
+var _map_min: Vector2 = Vector2.ZERO
+var _map_max: Vector2 = Vector2(DESIGN_W, DESIGN_H)
+var _region_cen: Dictionary = {}
+var _zoom: float = 1.0
+var _focus: Vector2 = Vector2.ZERO
+var _map_rect: Rect2 = Rect2()
+var _panning: bool = false
 var _rng := RandomNumberGenerator.new()
 var _t := 0.0
 var _roll_t := -1.0
@@ -171,7 +194,7 @@ func _ready() -> void:
 		_deploy_type = "ron"
 		_stage = Stage.WAR
 		_ninja_holder = _player
-		_selected = "kanto"
+		_selected = _owned(_player)[0]
 		await _shoot()
 		return
 	if "--shotodds" in args:
@@ -179,38 +202,50 @@ func _ready() -> void:
 		_war_idx = _order.find(_player)
 		_stage = Stage.WAR
 		_war_sub = War.MANEUVER
-		_selected = "kanto"
-		if _provinces.has("kanto"):
-			for aid in _provinces["kanto"]["adj"]:
-				if _provinces.has(aid) and _provinces[aid].get("owner") != _player and _provinces[aid].get("owner") != null:
-					_hovered = aid
-					break
+		_selected = _owned(_player)[0]
+		for aid in _provinces[_selected]["adj"]:
+			if _provinces.has(aid) and _provinces[aid].get("owner") != _player:
+				_hovered = aid
+				break
 		await _shoot()
 		return
 	if "--testsave" in args:
+		var home: String = _owned(_player)[0]
+		var enemy: String = _owned("B")[0]
 		_stage = Stage.WAR
 		_war_sub = War.MANEUVER
 		_round = 7
-		_provinces["kanto"]["castle"] = 3
-		_provinces["kanto"]["units"]["sam"] = 9
-		_sync(_provinces["kanto"])
-		_scouted["mutsu"] = true
+		_provinces[home]["castle"] = 3
+		_provinces[home]["units"]["sam"] = 9
+		_sync(_provinces[home])
+		_scouted[enemy] = true
 		_save_game()
-		_provinces["kanto"]["castle"] = 0
-		_provinces["kanto"]["units"]["sam"] = 0
+		_provinces[home]["castle"] = 0
+		_provinces[home]["units"]["sam"] = 0
 		_round = 0
 		_scouted = {}
 		_load_game()
-		var ok: bool = int(_provinces["kanto"]["castle"]) == 3 and int(_provinces["kanto"]["units"]["sam"]) == 9 and _round == 7 and _scouted.has("mutsu") and _stage == Stage.WAR
-		print("SAVELOAD test: ok=%s castle=%d sam=%d round=%d scouted_mutsu=%s stage=%d" % [ok, int(_provinces["kanto"]["castle"]), int(_provinces["kanto"]["units"]["sam"]), _round, _scouted.has("mutsu"), _stage])
+		var ok: bool = int(_provinces[home]["castle"]) == 3 and int(_provinces[home]["units"]["sam"]) == 9 and _round == 7 and _scouted.has(enemy) and _stage == Stage.WAR
+		print("SAVELOAD test: ok=%s castle=%d sam=%d round=%d scouted=%s stage=%d" % [ok, int(_provinces[home]["castle"]), int(_provinces[home]["units"]["sam"]), _round, _scouted.has(enemy), _stage])
 		get_tree().quit()
+		return
+	if "--shotzoom" in args:
+		_order = _clans.keys()
+		_war_idx = _order.find(_player)
+		_stage = Stage.WAR
+		_war_sub = War.MANEUVER
+		_selected = _owned(_player)[0]
+		_zoom = 2.6
+		_focus = _provinces[_selected]["centroid"]
+		_clamp_focus()
+		await _shoot()
 		return
 	if "--shotfog" in args:
 		_order = _clans.keys()
 		_war_idx = _order.find(_player)
 		_stage = Stage.WAR
 		_war_sub = War.MANEUVER
-		_selected = "mutsu"
+		_selected = _owned("B")[0]
 		_ninja_holder = _player
 		_ninja_spy_arm = true
 		await _shoot()
@@ -219,8 +254,14 @@ func _ready() -> void:
 		_order = _clans.keys()
 		_war_idx = 0
 		_stage = Stage.WAR
-		var force := _take_all_but_one(_provinces["kanto"])
-		_resolve_battle("kanto", "mutsu", force)
+		var src: String = _owned(_player)[0]
+		var tgt := ""
+		for aid in _provinces[src]["adj"]:
+			if _provinces.has(aid) and _provinces[aid].get("owner") != _player:
+				tgt = aid
+				break
+		var force := _take_all_but_one(_provinces[src])
+		_resolve_battle(src, tgt, force)
 		await _shoot()
 		return
 	if "--shot" in args:
@@ -367,8 +408,9 @@ func _begin_round() -> void:
 	_shield = {"bid": 0, "ninja": 0, "levy": 0}
 	_sealed = false
 	_stage = Stage.ALLOCATE
-	if _provinces.has("kanto") and _provinces["kanto"].get("owner") == _player:
-		_selected = "kanto"
+	var _home := _owned(_player)
+	if _home.size() > 0:
+		_selected = _home[0]
 	queue_redraw()
 
 
@@ -723,7 +765,7 @@ func _ensure_odds() -> void:
 	if sp.get("owner") != _player or _army(sp) < 2 or _moved.has(_selected):
 		return
 	for aid in sp["adj"]:
-		if _provinces.has(aid) and _provinces[aid].get("owner") != _player and _provinces[aid].get("owner") != null:
+		if _provinces.has(aid) and _provinces[aid].get("owner") != _player:
 			_odds_cache[aid] = _attack_odds(_selected, aid)
 
 
@@ -895,8 +937,9 @@ func _check_victory() -> void:
 # ---------------------------------------------------------------- input
 
 func _province_at(point: Vector2) -> String:
+	var w := _screen_to_world(point)
 	for pid in _provinces:
-		if Geometry2D.is_point_in_polygon(point, _provinces[pid]["poly"]):
+		if Geometry2D.is_point_in_polygon(w, _provinces[pid]["poly"]):
 			return pid
 	return ""
 
@@ -909,7 +952,25 @@ func _button_at(point: Vector2) -> String:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	# Map view: wheel zooms toward the cursor; right-drag pans.
+	if event is InputEventMouseButton and _stage != Stage.MENU:
+		if event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed:
+			_zoom_at(event.position, 1.18)
+			queue_redraw()
+			return
+		if event.button_index == MOUSE_BUTTON_WHEEL_DOWN and event.pressed:
+			_zoom_at(event.position, 1.0 / 1.18)
+			queue_redraw()
+			return
+		if event.button_index == MOUSE_BUTTON_RIGHT:
+			_panning = event.pressed
+			return
 	if event is InputEventMouseMotion:
+		if _panning:
+			_focus -= event.relative / _zoom
+			_clamp_focus()
+			queue_redraw()
+			return
 		var h := _province_at(event.position)
 		if h != _hovered:
 			_hovered = h
@@ -997,6 +1058,9 @@ func _on_button(bid: String) -> void:
 		"newgame": _new_game()
 		"continue": _load_game()
 		"save_game": _save_game()
+		"zoom_in": _zoom_at(_view_center(), 1.25)
+		"zoom_out": _zoom_at(_view_center(), 0.8)
+		"zoom_reset": _reset_view()
 	queue_redraw()
 
 
@@ -1053,10 +1117,8 @@ func _handle_maneuver(pid: String) -> void:
 # ---------------------------------------------------------------- rendering
 
 func _fill_for(p: Dictionary) -> Color:
-	var owner = p.get("owner")
-	if owner != null and _clans.has(owner):
-		return _clans[owner]["tint"]
-	return C_PARCH
+	# Land base is the region's parchment shade; clan ownership is a bright overlay on top.
+	return REGION_TINT.get(p.get("region", ""), C_PARCH)
 
 
 func _owner_color(p: Dictionary) -> Color:
@@ -1161,16 +1223,34 @@ func _draw() -> void:
 		if _show_help:
 			_draw_help()
 		return
-	for sy in range(int(TOP_BAR) + 14, 720 - int(BOTTOM_BAR), 24):
-		draw_line(Vector2(0, sy), Vector2(1280, sy), Color(0.16, 0.22, 0.30, 0.22), 1.0)
+	_draw_sea()
+	draw_set_transform(_view_off(), 0.0, Vector2(_zoom, _zoom))  # enter map view (zoom/pan)
+	# Land: shoreline + region parchment base.
 	for pid in _provinces:
 		var p: Dictionary = _provinces[pid]
 		_draw_coast(p["poly"])
 		draw_colored_polygon(p["poly"], _fill_for(p))
-		var w := 1.4
+	# Terrain relief — scattered mountains/hills give the geography-map feel.
+	_draw_terrain()
+	# Bright clan-coloured territory overlay (terrain still shows through).
+	for pid in _provinces:
+		var po: Dictionary = _provinces[pid]
+		var owner = po.get("owner")
+		if owner != null and _clans.has(owner):
+			var cc: Color = _clans[owner]["color"]
+			draw_colored_polygon(po["poly"], Color(cc.r, cc.g, cc.b, 0.52))
+	# Faint region names beneath the tokens, for orientation.
+	for rg in _region_cen:
+		_head_centered(rg, _region_cen[rg] as Vector2, 19, Color(0.18, 0.15, 0.10, 0.26))
+	# Province borders (muted; brighter on hover).
+	for pid in _provinces:
+		var pb: Dictionary = _provinces[pid]
+		var bw := 1.0
+		var bc := C_BORDER
 		if pid == _hovered and _stage == Stage.WAR:
-			w = 2.4
-		draw_polyline(_closed(p["poly"]), C_STEEL, w, true)
+			bw = 2.4
+			bc = C_PARCH
+		draw_polyline(_closed(pb["poly"]), bc, bw, true)
 
 	var human_war := _stage == Stage.WAR and _active() == _player and not _game_over
 	if human_war and _war_sub == War.MANEUVER:
@@ -1218,7 +1298,16 @@ func _draw() -> void:
 		if int(p2.get("daimyo", 0)) > 0:
 			draw_circle(cen + Vector2(-13, -14), 7.5, C_GOLD)
 			_text_centered(str(int(p2["daimyo"])), cen + Vector2(-13, -10), 11, C_PANEL)
-		_text_centered(String(p2["name"]), cen + Vector2(0, 30), 10, C_LABEL)
+
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)  # leave map view — UI below is screen-space
+	# Province name on hover (replaces the old always-on labels — too dense at 72).
+	if _stage == Stage.WAR and _hovered != "" and _provinces.has(_hovered):
+		var hp: Dictionary = _provinces[_hovered]
+		var nm := String(hp["name"])
+		var hc: Vector2 = _world_to_screen(hp["centroid"])
+		var tw := _font.get_string_size(nm, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
+		draw_rect(Rect2(hc.x - tw * 0.5 - 6, hc.y - 33, tw + 12, 18), Color(0.04, 0.05, 0.06, 0.85), true)
+		_text_centered(nm, Vector2(hc.x, hc.y - 20), 13, C_PARCH)
 
 	if human_war and _war_sub == War.MANEUVER and not _ninja_arm and not _ninja_spy_arm:
 		_draw_odds_tip()
@@ -1262,7 +1351,7 @@ func _draw_odds_tip() -> void:
 	if _hovered == "" or not _odds_cache.has(_hovered):
 		return
 	var o: Dictionary = _odds_cache[_hovered]
-	var cen: Vector2 = _provinces[_hovered]["centroid"]
+	var cen: Vector2 = _world_to_screen(_provinces[_hovered]["centroid"])
 	var w := 172.0
 	var h := 98.0
 	var x := clampf(cen.x + 18, 8, 1280 - w - 8)
@@ -1430,6 +1519,10 @@ func _draw_reveal() -> void:
 func _draw_buttons() -> void:
 	_buttons = []
 	_add_button("help", Rect2(1240, 14, 28, 28), "?", true, _show_help)
+	if _stage != Stage.MENU and not _game_over:
+		_add_button("zoom_in", Rect2(16, 600, 30, 30), "+", true, false)
+		_add_button("zoom_out", Rect2(50, 600, 30, 30), "–", true, false)
+		_add_button("zoom_reset", Rect2(84, 600, 46, 30), "Fit", true, _zoom <= 1.001)
 	if _stage == Stage.MENU:
 		var dn := {"easy": "Easy", "normal": "Normal", "hard": "Hard"}
 		var bx := 433.0
@@ -1585,7 +1678,45 @@ func _draw_gameover() -> void:
 
 
 func _draw_coast(poly: PackedVector2Array) -> void:
-	draw_polyline(_closed(poly), Color(0.04, 0.07, 0.11), 4.0, true)
+	var c := _closed(poly)
+	draw_polyline(c, Color(0.043, 0.071, 0.106, 0.55), 6.0, true)  # soft shoreline halo
+	draw_polyline(c, C_INK, 3.0, true)                              # crisp coastline
+
+
+## Draws the precomputed mountain marks across the land for a relief-map feel.
+func _draw_terrain() -> void:
+	for pid in _provinces:
+		for m in _provinces[pid].get("mtns", []):
+			_draw_mtn(m as Vector2)
+
+
+func _draw_mtn(c: Vector2) -> void:
+	var dark := Color(0.451, 0.388, 0.290, 0.80)
+	var lite := Color(0.776, 0.706, 0.545, 0.85)
+	var snow := Color(0.93, 0.91, 0.86, 0.9)
+	var w := 5.2
+	var h := 6.6
+	var apex := c + Vector2(0, -h)
+	# shaded body
+	draw_colored_polygon(PackedVector2Array([c + Vector2(-w, h * 0.55), apex, c + Vector2(w, h * 0.55)]), dark)
+	# lit left face
+	draw_colored_polygon(PackedVector2Array([c + Vector2(-w, h * 0.55), apex, c + Vector2(-w * 0.12, h * 0.18)]), lite)
+	# snowcap
+	draw_colored_polygon(PackedVector2Array([apex, apex + Vector2(-w * 0.34, h * 0.42), apex + Vector2(w * 0.34, h * 0.42)]), snow)
+
+
+## The sea: a filled play area with a faint nautical grid and an edge vignette.
+func _draw_sea() -> void:
+	var top := TOP_BAR
+	var h := 720.0 - TOP_BAR - BOTTOM_BAR
+	draw_rect(Rect2(0, top, 1280, h), C_SEA, true)
+	for sy in range(int(top) + 16, int(top + h), 26):
+		draw_line(Vector2(0, sy), Vector2(1280, sy), Color(0.16, 0.22, 0.30, 0.16), 1.0)
+	for sx in range(48, 1280, 64):
+		draw_line(Vector2(sx, top), Vector2(sx, top + h), Color(0.16, 0.22, 0.30, 0.09), 1.0)
+	for i in 6:
+		var inset := i * 7.0
+		draw_rect(Rect2(inset, top + inset, 1280 - inset * 2, h - inset * 2), Color(C_SEA2.r, C_SEA2.g, C_SEA2.b, 0.05), false, 13.0)
 
 
 func _draw_menu() -> void:
@@ -1607,16 +1738,63 @@ func _draw_menu() -> void:
 
 # ---------------------------------------------------------------- data + dev
 
+## Fits the map's actual bounding box (_map_min.._map_max, set in _load_data) into the
+## play area, so any map — 16 provinces or 72 — fills the screen the same way.
 func _compute_transform() -> void:
 	var vp := Vector2(1280, 720)
-	_scale = min((vp.x - 48.0) / DESIGN_W, (vp.y - TOP_BAR - BOTTOM_BAR - 16.0) / DESIGN_H)
-	var map_w := DESIGN_W * _scale
-	var map_h := DESIGN_H * _scale
+	var span := _map_max - _map_min
+	if span.x <= 0.0 or span.y <= 0.0:
+		span = Vector2(DESIGN_W, DESIGN_H)
+	_scale = min((vp.x - 48.0) / span.x, (vp.y - TOP_BAR - BOTTOM_BAR - 16.0) / span.y)
+	var map_w := span.x * _scale
+	var map_h := span.y * _scale
 	_offset = Vector2((vp.x - map_w) * 0.5, TOP_BAR + ((vp.y - TOP_BAR - BOTTOM_BAR) - map_h) * 0.5)
+	_map_rect = Rect2(_offset, Vector2(map_w, map_h))
+	_reset_view()
 
 
 func _to_screen(p: Vector2) -> Vector2:
-	return Vector2(p.x * _scale + _offset.x, p.y * _scale + _offset.y)
+	return Vector2((p.x - _map_min.x) * _scale + _offset.x, (p.y - _map_min.y) * _scale + _offset.y)
+
+
+# ---------------------------------------------------------------- map view (zoom / pan)
+
+func _view_center() -> Vector2:
+	return Vector2(640.0, TOP_BAR + (720.0 - TOP_BAR - BOTTOM_BAR) * 0.5)
+
+
+## Canvas translation paired with a uniform _zoom scale, applied via draw_set_transform.
+func _view_off() -> Vector2:
+	return _view_center() - _focus * _zoom
+
+
+func _world_to_screen(p: Vector2) -> Vector2:
+	return (p - _focus) * _zoom + _view_center()
+
+
+func _screen_to_world(p: Vector2) -> Vector2:
+	return (p - _view_center()) / _zoom + _focus
+
+
+func _reset_view() -> void:
+	_zoom = 1.0
+	_focus = _map_rect.get_center() if _map_rect.size.x > 0.0 else _view_center()
+
+
+## Keep the focus point within the map so panning can't lose the islands off-screen.
+func _clamp_focus() -> void:
+	if _map_rect.size.x <= 0.0:
+		return
+	_focus.x = clampf(_focus.x, _map_rect.position.x, _map_rect.position.x + _map_rect.size.x)
+	_focus.y = clampf(_focus.y, _map_rect.position.y, _map_rect.position.y + _map_rect.size.y)
+
+
+## Zoom by [param factor] about a screen point, keeping the land under that point fixed.
+func _zoom_at(screen_pos: Vector2, factor: float) -> void:
+	var w := _screen_to_world(screen_pos)
+	_zoom = clampf(_zoom * factor, 1.0, 5.0)
+	_focus = w - (screen_pos - _view_center()) / _zoom
+	_clamp_focus()
 
 
 func _load_data() -> void:
@@ -1645,9 +1823,20 @@ func _load_data() -> void:
 			"ai": ai_levels.get(cid, "medium"),
 			"persona": personas.get(cid, "opportunist"),
 		}
+	var provs: Dictionary = data.get("provinces", {})
+	# First pass: bounding box of all raw points, so the transform can fit any map.
+	var pmin := Vector2(INF, INF)
+	var pmax := Vector2(-INF, -INF)
+	for pid in provs.keys():
+		for pt in provs[pid]["points"]:
+			pmin.x = minf(pmin.x, pt[0]); pmin.y = minf(pmin.y, pt[1])
+			pmax.x = maxf(pmax.x, pt[0]); pmax.y = maxf(pmax.y, pt[1])
+	_map_min = pmin
+	_map_max = pmax
+	_compute_transform()
 	_provinces = {}
-	for pid in data.get("provinces", {}).keys():
-		var p: Dictionary = data["provinces"][pid]
+	for pid in provs.keys():
+		var p: Dictionary = provs[pid]
 		var poly := PackedVector2Array()
 		for pt in p["points"]:
 			poly.append(_to_screen(Vector2(pt[0], pt[1])))
@@ -1660,7 +1849,48 @@ func _load_data() -> void:
 			"name": p["name"], "poly": poly, "centroid": _to_screen(Vector2(cen[0], cen[1])),
 			"owner": p.get("owner"), "units": units, "army": n, "daimyo": 0,
 			"castle": int(p.get("castle", 0)), "adj": p.get("adj", []),
+			"region": p.get("region", ""),
 		}
+	# Region label anchors = mean of each region's province centroids.
+	_region_cen = {}
+	var racc := {}
+	for pid in _provinces:
+		var rg := String(_provinces[pid].get("region", ""))
+		if rg == "":
+			continue
+		if not racc.has(rg):
+			racc[rg] = [Vector2.ZERO, 0]
+		racc[rg][0] += _provinces[pid]["centroid"]
+		racc[rg][1] = int(racc[rg][1]) + 1
+	for rg in racc:
+		_region_cen[rg] = (racc[rg][0] as Vector2) / float(racc[rg][1])
+	# Terrain: scatter mountain marks inside each province (stable per load). Japan is
+	# mountainous, so this carries the geography-map look; plains regions get fewer.
+	var trng := RandomNumberGenerator.new()
+	trng.seed = 92017
+	var mtn_bonus := {"Chūbu": 4, "Tōhoku": 3, "Hokuriku": 3, "Ezo": 3, "Chūgoku": 2, "Shikoku": 2, "Kyūshū": 2, "Tōkai": 1, "Kinai": 1, "Kantō": 0}
+	for pid in _provinces:
+		var pr: Dictionary = _provinces[pid]
+		var poly: PackedVector2Array = pr["poly"]
+		var bmin := poly[0]
+		var bmax := poly[0]
+		var ar := 0.0
+		for vi in poly.size():
+			bmin.x = minf(bmin.x, poly[vi].x); bmin.y = minf(bmin.y, poly[vi].y)
+			bmax.x = maxf(bmax.x, poly[vi].x); bmax.y = maxf(bmax.y, poly[vi].y)
+			var vj := poly[(vi + 1) % poly.size()]
+			ar += poly[vi].x * vj.y - vj.x * poly[vi].y
+		ar = absf(ar) * 0.5
+		var cnt := clampi(int(ar / 2600.0) + int(mtn_bonus.get(pr["region"], 1)), 1, 11)
+		var mtns: Array = []
+		var tries := 0
+		while mtns.size() < cnt and tries < cnt * 14:
+			tries += 1
+			var pt := Vector2(trng.randf_range(bmin.x, bmax.x), trng.randf_range(bmin.y, bmax.y))
+			if Geometry2D.is_point_in_polygon(pt, poly) and pt.distance_to(pr["centroid"]) > 13.0:
+				mtns.append(pt)
+		mtns.sort_custom(func(a, b): return a.y < b.y)
+		pr["mtns"] = mtns
 
 
 ## ---------------------------------------------------------------- save / load
