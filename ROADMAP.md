@@ -5,11 +5,16 @@
 This is the living growth plan: everything on the table for making Sengoku deeper, smarter,
 and more beautiful. It's roughly ordered by impact, not commitment — pick what's fun.
 
-## Where we are now (v1.0)
+## Where we are now (v1.1)
 A complete, playable single-player game: secret koku auction (turn-order + ninja + levy bids),
 five unit types, castles + castle-building, ronin, a shared ninja with assassinations, daimyō
 generals that lead and level up, faithful ranged→melee d12 combat, three AI strengths, a title
 screen, an in-game field guide, and an Art-of-War theme throughout. Ships as Windows + Web builds.
+
+**New in v1.1:** a **battle-odds preview** (hover an enemy to see your Monte-Carlo win %),
+**true daimyō elimination** (lose your last general and your clan falls, its lands to the conqueror),
+**fog of war + a ninja spy action** (enemy army makeup is hidden until you scout it),
+**AI personalities** (aggressive / defensive / economic / opportunist rivals), and **save / load**.
 
 It is built as a **single-file immediate-mode prototype** (`src/main/main.gd`). That's the biggest
 piece of intentional debt — see "Foundation" below.
@@ -19,10 +24,10 @@ piece of intentional debt — see "Foundation" below.
 ## Phase 1 — Depth & faithfulness (toward the real board game)
 - **Full map of Japan**: expand the 16-province prototype to all ~68 historical provinces with
   real adjacency, regions, and varied income — the single biggest "more game" upgrade.
-- **True daimyō elimination**: lose your *last* daimyō and you're knocked out (the iconic rule),
-  with their territory/units transferring to the conqueror.
-- **Fog of war + scouting**: hide enemy army *composition* (show only totals); the ninja's **spy**
-  action reveals it. Makes the bluff and the ninja matter more.
+- ✅ **True daimyō elimination** *(done v1.1)*: lose your *last* daimyō and you're knocked out (the
+  iconic rule), with their territory/units transferring to the conqueror.
+- ✅ **Fog of war + scouting** *(done v1.1)*: enemy army *composition* is hidden (totals stay visible);
+  the ninja's **spy** action reveals it. *(Next: hide totals too, and spy/assassinate risk.)*
 - **Richer ninja**: spy vs. assassinate choice, ninja survival/capture risk, repeat-use.
 - **Ronin hire phase**: a dedicated hire step with a ronin pool, per the original game's flow.
 - **Honor / loyalty / morale**: provinces revolt, ronin desert, morale swings after big losses.
@@ -32,16 +37,16 @@ piece of intentional debt — see "Foundation" below.
 
 ## Phase 2 — Smarter rivals (the "Worthy Rivals" pillar)
 - **Look-ahead AI**: replace the greedy heuristic with light search / scoring so Hard truly plans.
-- **AI personalities**: aggressive, defensive, opportunist, economic — each bids and fights differently.
+- ✅ **AI personalities** *(done v1.1)*: aggressive, defensive, opportunist, economic — each bids and fights differently.
 - **Adaptive difficulty & handicaps** for new players.
 - **Readable intent**: telegraph AI threats so the player can outwit, not just out-roll.
 
 ## Phase 3 — Game feel & balance
 - **Balance pass**: tune unit costs/hit-values, castle garrison strength, income curve, and the
   win threshold; reduce late-game grind. (Current autoplay: ~7–19 rounds.)
-- **Battle preview / odds** before committing an attack (win % + risk band).
+- ✅ **Battle preview / odds** *(done v1.1)* before committing an attack (win % + risk band).
 - **Undo-before-commit** in planning; confirmations on irreversible moves.
-- **Save / load** an in-progress campaign; **hotseat** pass-and-play for 2–5 humans.
+- ✅ **Save / load** an in-progress campaign *(done v1.1)*; **hotseat** pass-and-play for 2–5 humans *(next up)*.
 - **Online multiplayer** (the architecture is meant to support it — needs the deterministic core).
 
 ## Phase 4 — Presentation & polish

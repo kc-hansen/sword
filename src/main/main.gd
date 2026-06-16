@@ -18,6 +18,7 @@ extends Node2D
 ## design/gdd/systems-index.md and will be node-based per art-bible §8.4.
 
 const DATA_PATH := "res://assets/data/provinces.json"
+const SAVE_PATH := "user://sengoku_save.json"
 const DESIGN_W := 460.0
 const DESIGN_H := 372.0
 const TOP_BAR := 56.0
@@ -42,7 +43,7 @@ const UNIT_DESC := {
 	"gun": "Gunner — ranged, fires first. Hits on 6 or less (50%) — your best damage per soldier, but costly.",
 	"sam": "Samurai — elite melee. Hits on 6 or less (50%). Your hardest-hitting front line.",
 	"ron": "Ronin — hired mercenaries. Powerful melee (hits on 7 or less, 58%) but they DISBAND at the end of your turn. Buy and strike the same turn.",
-	"dai": "Daimyō (general) — leads an army into battle, adding several elite attacks. Each attack it launches from a province carries it forward; victories level it up (to Lv 3). It dies if its army is wiped out or its province is captured. You start with two.",
+	"dai": "Daimyō (general) — leads an army into battle, adding several elite attacks. Each attack it launches from a province carries it forward; victories level it up (to Lv 3). It dies if its army is wiped out or its province is captured. You start with two — and if your LAST daimyō falls, your clan is eliminated and its lands pass to the conqueror. Guard them, and hunt the enemy's.",
 	"castle": "Castle — each level adds 2 garrison defenders that fight as ashigaru and die FIRST. Build on front-line provinces to hold them.",
 }
 
@@ -78,6 +79,10 @@ const C_REDLT := Color(0.878, 0.565, 0.498)
 const C_LABEL := Color(0.227, 0.227, 0.196)
 const C_WHITE := Color(0.96, 0.95, 0.92)
 const C_DIM := Color(0, 0, 0, 0.62)
+const C_GREEN := Color(0.431, 0.659, 0.361)
+const C_AMBER := Color(0.847, 0.651, 0.271)
+const C_RISK := Color(0.780, 0.318, 0.282)
+const ODDS_TRIALS := 200
 
 var _provinces: Dictionary = {}
 var _clans: Dictionary = {}
@@ -97,6 +102,8 @@ var _difficulty: String = "normal"
 var _ninja_holder: String = ""
 var _ninja_used: bool = false
 var _ninja_arm: bool = false
+var _ninja_spy_arm: bool = false
+var _scouted: Dictionary = {}
 var _moved: Dictionary = {}
 var _selected: String = ""
 var _hovered: String = ""
@@ -114,6 +121,8 @@ var _offset: Vector2 = Vector2.ZERO
 var _rng := RandomNumberGenerator.new()
 var _t := 0.0
 var _roll_t := -1.0
+var _odds_cache: Dictionary = {}
+var _odds_for: String = "__none__"
 
 
 func _process(delta: float) -> void:
@@ -165,6 +174,47 @@ func _ready() -> void:
 		_selected = "kanto"
 		await _shoot()
 		return
+	if "--shotodds" in args:
+		_order = _clans.keys()
+		_war_idx = _order.find(_player)
+		_stage = Stage.WAR
+		_war_sub = War.MANEUVER
+		_selected = "kanto"
+		if _provinces.has("kanto"):
+			for aid in _provinces["kanto"]["adj"]:
+				if _provinces.has(aid) and _provinces[aid].get("owner") != _player and _provinces[aid].get("owner") != null:
+					_hovered = aid
+					break
+		await _shoot()
+		return
+	if "--testsave" in args:
+		_stage = Stage.WAR
+		_war_sub = War.MANEUVER
+		_round = 7
+		_provinces["kanto"]["castle"] = 3
+		_provinces["kanto"]["units"]["sam"] = 9
+		_sync(_provinces["kanto"])
+		_scouted["mutsu"] = true
+		_save_game()
+		_provinces["kanto"]["castle"] = 0
+		_provinces["kanto"]["units"]["sam"] = 0
+		_round = 0
+		_scouted = {}
+		_load_game()
+		var ok: bool = int(_provinces["kanto"]["castle"]) == 3 and int(_provinces["kanto"]["units"]["sam"]) == 9 and _round == 7 and _scouted.has("mutsu") and _stage == Stage.WAR
+		print("SAVELOAD test: ok=%s castle=%d sam=%d round=%d scouted_mutsu=%s stage=%d" % [ok, int(_provinces["kanto"]["castle"]), int(_provinces["kanto"]["units"]["sam"]), _round, _scouted.has("mutsu"), _stage])
+		get_tree().quit()
+		return
+	if "--shotfog" in args:
+		_order = _clans.keys()
+		_war_idx = _order.find(_player)
+		_stage = Stage.WAR
+		_war_sub = War.MANEUVER
+		_selected = "mutsu"
+		_ninja_holder = _player
+		_ninja_spy_arm = true
+		await _shoot()
+		return
 	if "--shotbattle" in args:
 		_order = _clans.keys()
 		_war_idx = 0
@@ -187,6 +237,9 @@ func _new_game() -> void:
 	_modal = null
 	_selected = ""
 	_ninja_holder = ""
+	_ninja_arm = false
+	_ninja_spy_arm = false
+	_scouted = {}
 	_log("The Sengoku wars begin. Bid for initiative and the ninja, then conquer Japan.")
 	_stage = Stage.MENU
 
@@ -232,6 +285,15 @@ func _sum4(c: Dictionary) -> int:
 
 func _sync(p: Dictionary) -> void:
 	p["army"] = _army(p)
+
+
+## Enemy provinces hide their unit breakdown (the total stays visible) until a ninja scouts
+## them. Your own and neutral provinces are always legible.
+func _is_fogged(pid: String) -> bool:
+	if _scouted.has(pid):
+		return false
+	var o = _provinces[pid].get("owner")
+	return o != null and o != _player
 
 
 func _comp_str(p: Dictionary) -> String:
@@ -383,6 +445,38 @@ func _count(cid: String) -> int:
 	return n
 
 
+## How many of a clan's provinces still hold a daimyō. Reaching zero eliminates the clan.
+func _daimyo_count(cid: String) -> int:
+	var n := 0
+	for pid in _provinces:
+		var p: Dictionary = _provinces[pid]
+		if p.get("owner") == cid and int(p.get("daimyo", 0)) > 0:
+			n += 1
+	return n
+
+
+## Transfers every remaining province of [param cid] to [param slayer] (or to neutral if
+## the slayer is null), then logs the clan's fall. Called the instant a clan loses its
+## last daimyō — the iconic Samurai Swords elimination rule.
+func _eliminate_clan(cid: String, slayer) -> void:
+	var lands := _owned(cid)
+	var to_clan: bool = slayer != null and _clans.has(slayer) and slayer != cid
+	for pid in lands:
+		_provinces[pid]["owner"] = slayer if to_clan else null
+		_sync(_provinces[pid])
+	if to_clan:
+		_log("%s's last daimyō has fallen — the clan is eliminated, and %s claims its %d provinces." % [_clan_name(cid), _clan_name(slayer), lands.size()])
+	else:
+		_log("%s's last daimyō has fallen — the leaderless clan scatters." % _clan_name(cid))
+
+
+## Warn the human the moment they are reduced to a single daimyō, so sudden elimination
+## never comes without notice.
+func _maybe_warn_last_daimyo(cid) -> void:
+	if cid == _player and _count(cid) > 0 and _daimyo_count(cid) == 1:
+		_log("⚠ Only one daimyō remains to you — if it falls, your clan falls with it.")
+
+
 func _owned(cid: String) -> Array:
 	var a := []
 	for pid in _provinces:
@@ -425,6 +519,7 @@ func _ninja_strike(target_id: String) -> void:
 		return
 	_ninja_used = true
 	_ninja_arm = false
+	_dirty_odds()
 	var roll := _rng.randi_range(1, 12)
 	if roll <= NINJA_SUCCESS:
 		for k in ["sam", "gun", "arc", "ron", "ash"]:
@@ -436,6 +531,20 @@ func _ninja_strike(target_id: String) -> void:
 		_log("%s's ninja found %s undefended." % [_clan_name(_ninja_holder), p["name"]])
 	else:
 		_log("%s's ninja was discovered in %s — the strike failed (rolled %d)." % [_clan_name(_ninja_holder), p["name"], roll])
+
+
+## Ninja SPY — the holder's alternative to assassination. Permanently reveals a province's
+## troop composition (lifts the fog), and is consumed like a strike (one ninja act per round).
+func _ninja_spy(target_id: String) -> void:
+	if _ninja_used:
+		return
+	var p: Dictionary = _provinces[target_id]
+	if p.get("owner") == _ninja_holder or p.get("owner") == null:
+		return
+	_ninja_used = true
+	_ninja_spy_arm = false
+	_scouted[target_id] = true
+	_log("%s's ninja scouted %s — %s." % [_clan_name(_ninja_holder), p["name"], _comp_inline(p["units"])])
 
 
 func _ai_ninja(cid: String) -> void:
@@ -484,25 +593,7 @@ func _resolve_battle(att_id: String, def_id: String, att: Dictionary, att_dai: i
 	var def_start := {"ash": int(du["ash"]), "arc": int(du["arc"]), "gun": int(du["gun"]), "sam": int(du["sam"]), "ron": int(du["ron"])}
 	var a0 := _sum4(att)
 	var d0 := _sum4(du) + gar0
-	var att_order := ["ash", "ron", "arc", "gun", "sam"]
-	var def_order := ["gar", "ash", "ron", "arc", "gun", "sam"]
-	var guard := 0
-	while _sum4(att) > 0 and (_sum4(defw) + int(defw["gar"])) > 0 and guard < 400:
-		guard += 1
-		var on_def := _rh(int(att["arc"]), VAL["arc"]) + _rh(int(att["gun"]), VAL["gun"])
-		var on_att := _rh(int(defw["arc"]), VAL["arc"]) + _rh(int(defw["gun"]), VAL["gun"])
-		_rm(defw, on_def, def_order)
-		_rm(att, on_att, att_order)
-		if _sum4(att) <= 0 or (_sum4(defw) + int(defw["gar"])) <= 0:
-			break
-		on_def = _rh(int(att["sam"]), VAL["sam"]) + _rh(int(att["ron"]), VAL["ron"]) + _rh(int(att["ash"]), VAL["ash"])
-		on_att = _rh(int(defw["sam"]), VAL["sam"]) + _rh(int(defw["ron"]), VAL["ron"]) + _rh(int(defw["ash"]) + int(defw["gar"]), VAL["ash"])
-		if att_dai > 0:
-			on_def += _rh(2 + att_dai, VAL["sam"])
-		if def_dai > 0:
-			on_att += _rh(2 + def_dai, VAL["sam"])
-		_rm(defw, on_def, def_order)
-		_rm(att, on_att, att_order)
+	var guard := _simulate(att, defw, att_dai, def_dai)
 	var won := (_sum4(defw) + int(defw["gar"])) <= 0
 	if won:
 		dp["units"] = {"ash": int(att["ash"]), "arc": int(att["arc"]), "gun": int(att["gun"]), "sam": int(att["sam"]), "ron": int(att["ron"])}
@@ -514,8 +605,12 @@ func _resolve_battle(att_id: String, def_id: String, att: Dictionary, att_dai: i
 			_log("%s's daimyō fell at %s!" % [_clan_name(def_owner), dp["name"]])
 		if att_dai > 0 and att_dai + 1 <= DAIMYO_MAX:
 			_log("%s's victorious daimyō rises to Lv %d." % [_clan_name(attacker), att_dai + 1])
-		if def_owner != null and _count(def_owner) == 0:
+		if def_owner != null and _count(def_owner) > 0 and _daimyo_count(def_owner) == 0:
+			_eliminate_clan(def_owner, attacker)
+		elif def_owner != null and _count(def_owner) == 0:
 			_log("The %s clan has been destroyed!" % _clan_name(def_owner))
+		elif def_dai > 0:
+			_maybe_warn_last_daimyo(def_owner)
 	else:
 		var home: Dictionary = ap["units"]
 		for k in UNIT_KEYS:
@@ -525,6 +620,10 @@ func _resolve_battle(att_id: String, def_id: String, att: Dictionary, att_dai: i
 				ap["daimyo"] = att_dai
 			else:
 				_log("%s's daimyō was slain assaulting %s." % [_clan_name(attacker), dp["name"]])
+				if attacker != null and _count(attacker) > 0 and _daimyo_count(attacker) == 0:
+					_eliminate_clan(attacker, def_owner)
+				else:
+					_maybe_warn_last_daimyo(attacker)
 		_sync(ap)
 		dp["units"] = {"ash": int(defw["ash"]), "arc": int(defw["arc"]), "gun": int(defw["gun"]), "sam": int(defw["sam"]), "ron": int(defw["ron"])}
 		if def_dai > 0:
@@ -545,6 +644,95 @@ func _resolve_battle(att_id: String, def_id: String, att: Dictionary, att_dai: i
 		_roll_t = 0.0
 
 
+## Runs the faithful ranged→melee combat loop in place, mutating [param att] and
+## [param defw] (which carries a "gar" garrison key) down to survivors. Returns the
+## number of rounds fought. Single source of truth for both real battles and the
+## odds preview, so the preview can never drift from how combat actually resolves.
+func _simulate(att: Dictionary, defw: Dictionary, att_dai: int, def_dai: int) -> int:
+	var att_order := ["ash", "ron", "arc", "gun", "sam"]
+	var def_order := ["gar", "ash", "ron", "arc", "gun", "sam"]
+	var guard := 0
+	while _sum4(att) > 0 and (_sum4(defw) + int(defw["gar"])) > 0 and guard < 400:
+		guard += 1
+		var on_def := _rh(int(att["arc"]), VAL["arc"]) + _rh(int(att["gun"]), VAL["gun"])
+		var on_att := _rh(int(defw["arc"]), VAL["arc"]) + _rh(int(defw["gun"]), VAL["gun"])
+		_rm(defw, on_def, def_order)
+		_rm(att, on_att, att_order)
+		if _sum4(att) <= 0 or (_sum4(defw) + int(defw["gar"])) <= 0:
+			break
+		on_def = _rh(int(att["sam"]), VAL["sam"]) + _rh(int(att["ron"]), VAL["ron"]) + _rh(int(att["ash"]), VAL["ash"])
+		on_att = _rh(int(defw["sam"]), VAL["sam"]) + _rh(int(defw["ron"]), VAL["ron"]) + _rh(int(defw["ash"]) + int(defw["gar"]), VAL["ash"])
+		if att_dai > 0:
+			on_def += _rh(2 + att_dai, VAL["sam"])
+		if def_dai > 0:
+			on_att += _rh(2 + def_dai, VAL["sam"])
+		_rm(defw, on_def, def_order)
+		_rm(att, on_att, att_order)
+	return guard
+
+
+## The force a maneuver would commit: the whole army minus one unit left behind,
+## matching [method _take_all_but_one] without mutating the province.
+func _committed_comp(p: Dictionary) -> Dictionary:
+	var c := (p["units"] as Dictionary).duplicate()
+	for k in UNIT_KEYS:
+		if int(c[k]) > 0:
+			c[k] -= 1
+			break
+	return c
+
+
+## Monte-Carlo estimate of an attack from [param src_id] into [param def_id], by
+## running the real combat sim ODDS_TRIALS times. Returns win %, force sizes, and
+## a risk band ("favorable" / "even" / "risky").
+func _attack_odds(src_id: String, def_id: String) -> Dictionary:
+	var sp: Dictionary = _provinces[src_id]
+	var dp: Dictionary = _provinces[def_id]
+	var att_dai := int(sp["daimyo"])
+	var def_dai := int(dp["daimyo"])
+	var gar0 := int(dp["castle"]) * 2
+	var committed := _committed_comp(sp)
+	var du: Dictionary = dp["units"]
+	var wins := 0
+	for i in ODDS_TRIALS:
+		var att := committed.duplicate()
+		var defw := {"ash": int(du["ash"]), "arc": int(du["arc"]), "gun": int(du["gun"]), "sam": int(du["sam"]), "ron": int(du["ron"]), "gar": gar0}
+		_simulate(att, defw, att_dai, def_dai)
+		if (_sum4(defw) + int(defw["gar"])) <= 0:
+			wins += 1
+	var pct := int(round(100.0 * wins / ODDS_TRIALS))
+	var band := "risky"
+	if pct >= 70:
+		band = "favorable"
+	elif pct >= 45:
+		band = "even"
+	return {"pct": pct, "att": _sum4(committed), "def": _sum4(du) + gar0, "gar": gar0, "band": band, "dai": att_dai > 0}
+
+
+## Rebuild the cached odds for every enemy province adjacent to the selected army,
+## but only when the selection (or game state via [method _dirty_odds]) has changed —
+## the Monte-Carlo sims are far too costly to run every frame.
+func _ensure_odds() -> void:
+	if _odds_for == _selected:
+		return
+	_odds_for = _selected
+	_odds_cache = {}
+	if _selected == "" or not _provinces.has(_selected):
+		return
+	var sp: Dictionary = _provinces[_selected]
+	if sp.get("owner") != _player or _army(sp) < 2 or _moved.has(_selected):
+		return
+	for aid in sp["adj"]:
+		if _provinces.has(aid) and _provinces[aid].get("owner") != _player and _provinces[aid].get("owner") != null:
+			_odds_cache[aid] = _attack_odds(_selected, aid)
+
+
+## Force the next [method _ensure_odds] to recompute even if the selection is unchanged
+## (e.g. after a ninja strike alters an enemy garrison).
+func _dirty_odds() -> void:
+	_odds_for = "__dirty__"
+
+
 # ---------------------------------------------------------------- AI
 
 func _ai_allocate(cid: String) -> Dictionary:
@@ -559,6 +747,14 @@ func _ai_allocate(cid: String) -> Dictionary:
 		"easy":
 			f = 0.15
 			nmax = 1
+	# Personality reshapes how koku is split between initiative, the ninja, and the levy.
+	match _clans[cid].get("persona", "opportunist"):
+		"aggressive": f *= 0.6           # pour koku into the levy and attack
+		"defensive": f *= 0.8            # modest bids, save for troops + castles
+		"economic": f *= 0.6             # hoard buying power for cheap mass
+		"opportunist":
+			nmax += 1                    # prizes the ninja
+			f *= 1.15
 	var ninja := clampi(_rng.randi_range(0, nmax), 0, koku)
 	var rem := koku - ninja
 	var bid := int(round(rem * f)) + _rng.randi_range(-1, 1)
@@ -571,6 +767,17 @@ func _aggr(diff: String) -> int:
 		"hard": return 0
 		"easy": return 2
 		_: return 1
+
+
+## Aggression threshold combining the clan's difficulty (skill) with its personality
+## (temperament). Lower = attacks on slimmer margins.
+func _aggr_for(cid: String) -> int:
+	var base := _aggr(_clans[cid].get("ai", "medium"))
+	match _clans[cid].get("persona", "opportunist"):
+		"aggressive": return maxi(0, base - 1)
+		"defensive": return base + 2
+		"economic": return base + 1
+		_: return base
 
 
 func _ai_war_turn(cid: String) -> void:
@@ -589,9 +796,24 @@ func _ai_deploy(cid: String, koku: int) -> void:
 	if targets.size() == 0:
 		return
 	var diff: String = _clans[cid].get("ai", "medium")
+	var persona: String = _clans[cid].get("persona", "opportunist")
+	# Each temperament buys a different army: brawlers favor elite melee, turtles favor
+	# ranged + fodder, economists buy cheap mass, opportunists stay flexible.
 	var cycle := ["ash", "sam", "ash", "arc"]
+	match persona:
+		"aggressive": cycle = ["sam", "ron", "ash", "gun"]
+		"defensive": cycle = ["ash", "arc", "ash", "gun"]
+		"economic": cycle = ["ash", "ash", "arc"]
+		"opportunist": cycle = ["sam", "arc", "ash", "gun"]
 	if diff == "hard":
-		cycle = ["sam", "ash", "gun", "ron", "arc"]
+		cycle = cycle + ["gun"]
+	# A turtle spends first on raising a fortress where it can.
+	if persona == "defensive" and koku >= CASTLE_COST:
+		for pid in targets:
+			if int(_provinces[pid]["castle"]) < CASTLE_MAX:
+				_provinces[pid]["castle"] = int(_provinces[pid]["castle"]) + 1
+				koku -= CASTLE_COST
+				break
 	var ci := 0
 	var ti := 0
 	var guard := 0
@@ -609,14 +831,16 @@ func _ai_deploy(cid: String, koku: int) -> void:
 
 
 func _ai_maneuver(cid: String) -> void:
-	var diff: String = _clans[cid].get("ai", "medium")
 	for pid in _owned(cid):
 		var p: Dictionary = _provinces[pid]
 		if _army(p) < 2 or _moved.has(pid):
 			continue
 		var committed: int = _army(p) - 1
+		# Aggression blends difficulty + personality; a daimyō leading demands an extra
+		# margin, since losing the last general ends the clan.
+		var need: int = _aggr_for(cid) + (2 if int(p["daimyo"]) > 0 else 0)
 		var best := ""
-		var best_margin := -9999
+		var best_score := -9999
 		for aid in p["adj"]:
 			if not _provinces.has(aid):
 				continue
@@ -625,8 +849,10 @@ func _ai_maneuver(cid: String) -> void:
 				continue
 			var defv: int = _army(ap) + int(ap["castle"]) * 2
 			var margin: int = committed - defv
-			if margin >= _aggr(diff) and margin > best_margin:
-				best_margin = margin
+			# Hunt enemy daimyō: a viable strike that also fells a general is worth more.
+			var score: int = margin + (3 if int(ap.get("daimyo", 0)) > 0 else 0)
+			if margin >= need and score > best_score:
+				best_score = score
 				best = aid
 		if best != "":
 			var force := _take_all_but_one(p)
@@ -719,6 +945,13 @@ func _unhandled_input(event: InputEvent) -> void:
 			_ninja_arm = false
 			queue_redraw()
 			return
+		if _ninja_spy_arm:
+			var sp2: Dictionary = _provinces[hit]
+			if sp2.get("owner") != _player and sp2.get("owner") != null:
+				_ninja_spy(hit)
+			_ninja_spy_arm = false
+			queue_redraw()
+			return
 		if _war_sub == War.DEPLOY:
 			_handle_deploy(hit)
 		else:
@@ -744,17 +977,26 @@ func _on_button(bid: String) -> void:
 		"buy_sam": _deploy_type = "sam"
 		"buy_ron": _deploy_type = "ron"
 		"buy_castle": _deploy_type = "castle"
-		"ninja_arm": _ninja_arm = not _ninja_arm
+		"ninja_arm":
+			_ninja_arm = not _ninja_arm
+			_ninja_spy_arm = false
+		"ninja_spy":
+			_ninja_spy_arm = not _ninja_spy_arm
+			_ninja_arm = false
 		"help": _show_help = not _show_help
 		"diff_easy": _difficulty = "easy"
 		"diff_normal": _difficulty = "normal"
 		"diff_hard": _difficulty = "hard"
 		"begin_campaign": _start_campaign()
-		"done_deploy": _war_sub = War.MANEUVER
+		"done_deploy":
+			_war_sub = War.MANEUVER
+			_dirty_odds()
 		"end_turn":
 			_expire_ronin(_player)
 			_advance_war()
 		"newgame": _new_game()
+		"continue": _load_game()
+		"save_game": _save_game()
 	queue_redraw()
 
 
@@ -932,6 +1174,7 @@ func _draw() -> void:
 
 	var human_war := _stage == Stage.WAR and _active() == _player and not _game_over
 	if human_war and _war_sub == War.MANEUVER:
+		_ensure_odds()
 		var pa := 0.30 + 0.28 * sin(_t * 3.5)
 		for pid4 in _provinces:
 			var pw4: Dictionary = _provinces[pid4]
@@ -939,21 +1182,23 @@ func _draw() -> void:
 				draw_polyline(_closed(pw4["poly"]), Color(C_GOLD.r, C_GOLD.g, C_GOLD.b, pa), 1.6, true)
 	if _selected != "" and _provinces.has(_selected):
 		var sel: Dictionary = _provinces[_selected]
-		var actionable: bool = human_war and not _ninja_arm and _war_sub == War.MANEUVER and sel.get("owner") == _player and _army(sel) >= 2 and not _moved.has(_selected)
+		var actionable: bool = human_war and not _ninja_arm and not _ninja_spy_arm and _war_sub == War.MANEUVER and sel.get("owner") == _player and _army(sel) >= 2 and not _moved.has(_selected)
 		if actionable:
 			for aid in sel["adj"]:
 				if not _provinces.has(aid):
 					continue
 				var ap: Dictionary = _provinces[aid]
 				draw_polyline(_closed(ap["poly"]), C_GOLD, 2.0, true)
-				_draw_marker((sel["centroid"] + ap["centroid"]) * 0.5, ap.get("owner") != _player)
+				var band := String(_odds_cache.get(aid, {}).get("band", ""))
+				_draw_marker((sel["centroid"] + ap["centroid"]) * 0.5, ap.get("owner") != _player, band)
 		draw_polyline(_closed(sel["poly"]), C_GOLD, 3.0, true)
 
-	if human_war and _ninja_arm:
+	if human_war and (_ninja_arm or _ninja_spy_arm):
+		var glow: Color = C_RED if _ninja_arm else C_STEEL
 		for pid3 in _provinces:
 			var pp: Dictionary = _provinces[pid3]
 			if pp.get("owner") != _player and pp.get("owner") != null:
-				draw_polyline(_closed(pp["poly"]), C_RED, 2.4, true)
+				draw_polyline(_closed(pp["poly"]), glow, 2.4, true)
 
 	for pid2 in _provinces:
 		var p2: Dictionary = _provinces[pid2]
@@ -975,6 +1220,8 @@ func _draw() -> void:
 			_text_centered(str(int(p2["daimyo"])), cen + Vector2(-13, -10), 11, C_PANEL)
 		_text_centered(String(p2["name"]), cen + Vector2(0, 30), 10, C_LABEL)
 
+	if human_war and _war_sub == War.MANEUVER and not _ninja_arm and not _ninja_spy_arm:
+		_draw_odds_tip()
 	_draw_top_bar()
 	_draw_side_panel()
 	_draw_bottom_hud()
@@ -991,18 +1238,47 @@ func _draw() -> void:
 		_draw_help()
 
 
-func _draw_marker(pos: Vector2, enemy: bool) -> void:
+func _draw_marker(pos: Vector2, enemy: bool, band: String = "") -> void:
 	draw_circle(pos, 9.0, C_PANEL)
 	if enemy:
-		draw_arc(pos, 9.0, 0.0, TAU, 18, C_RED, 1.6, true)
-		draw_line(pos + Vector2(-3.4, -3.4), pos + Vector2(3.4, 3.4), C_REDLT, 1.8, true)
-		draw_line(pos + Vector2(3.4, -3.4), pos + Vector2(-3.4, 3.4), C_REDLT, 1.8, true)
+		var ec := C_RED
+		match band:
+			"favorable": ec = C_GREEN
+			"even": ec = C_AMBER
+			"risky": ec = C_RISK
+		draw_arc(pos, 9.0, 0.0, TAU, 18, ec, 1.6, true)
+		var xc := C_REDLT if band == "" else ec
+		draw_line(pos + Vector2(-3.4, -3.4), pos + Vector2(3.4, 3.4), xc, 1.8, true)
+		draw_line(pos + Vector2(3.4, -3.4), pos + Vector2(-3.4, 3.4), xc, 1.8, true)
 	else:
 		draw_arc(pos, 9.0, 0.0, TAU, 18, C_STEEL, 1.6, true)
 		draw_polyline(PackedVector2Array([
 			pos + Vector2(-3.5, 0), pos + Vector2(2.5, 0),
 			pos + Vector2(-0.5, -3), pos + Vector2(3, 0), pos + Vector2(-0.5, 3),
 		]), C_PARCH, 1.5, true)
+
+
+func _draw_odds_tip() -> void:
+	if _hovered == "" or not _odds_cache.has(_hovered):
+		return
+	var o: Dictionary = _odds_cache[_hovered]
+	var cen: Vector2 = _provinces[_hovered]["centroid"]
+	var w := 172.0
+	var h := 98.0
+	var x := clampf(cen.x + 18, 8, 1280 - w - 8)
+	var y := clampf(cen.y - h - 14, TOP_BAR + 6, 720 - BOTTOM_BAR - h - 6)
+	var bc := C_RISK
+	match String(o["band"]):
+		"favorable": bc = C_GREEN
+		"even": bc = C_AMBER
+	_panel(Rect2(x, y, w, h), C_PANEL, bc, 1.4, 8.0)
+	_head("ATTACK ODDS", Vector2(x + 12, y + 22), 11, C_STEEL)
+	_head("%d%%" % int(o["pct"]), Vector2(x + 12, y + 54), 28, bc)
+	_text_centered(String(o["band"]).to_upper(), Vector2(x + w - 50, y + 50), 12, bc)
+	var gar_txt: String = "" if int(o["gar"]) == 0 else "  (+%d garrison)" % int(o["gar"])
+	draw_string(_font, Vector2(x + 12, y + 74), "you %d  vs  %d%s" % [int(o["att"]), int(o["def"]), gar_txt], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, C_PARCH)
+	if bool(o["dai"]):
+		draw_string(_font, Vector2(x + 12, y + 90), "⚑ your daimyō leads the charge", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, C_GOLD)
 
 
 func _draw_top_bar() -> void:
@@ -1044,7 +1320,10 @@ func _draw_side_panel() -> void:
 		var cl := int(p["castle"])
 		var castle_txt: String = ("Lv %d · +%d garrison" % [cl, cl * 2]) if cl > 0 else "none"
 		draw_string(_font, Vector2(x + 14, y + 102), "Army %d    Castle: %s" % [_army(p), castle_txt], HORIZONTAL_ALIGNMENT_LEFT, -1, 13, C_PARCH)
-		draw_string(_font, Vector2(x + 14, y + 126), _comp_str(p), HORIZONTAL_ALIGNMENT_LEFT, -1, 11, C_STEEL)
+		if _is_fogged(_selected):
+			draw_string(_font, Vector2(x + 14, y + 126), "Composition hidden — send your ninja to scout", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, C_REDLT)
+		else:
+			draw_string(_font, Vector2(x + 14, y + 126), _comp_str(p), HORIZONTAL_ALIGNMENT_LEFT, -1, 11, C_STEEL)
 	var ly := y + 164.0
 	_panel(Rect2(x, ly, 250, 140), C_PANEL, C_IRON, 1.0, 12.0)
 	_head("DISPATCHES", Vector2(x + 14, ly + 22), 11, C_STEEL)
@@ -1092,8 +1371,9 @@ func _draw_bottom_hud() -> void:
 		if cid == _ninja_holder and alive:
 			nm += "  ⚔"
 		draw_string(_font_head, Vector2(sx + 44, cy + 28), nm, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, C_PARCH if cid == _player else C_STEEL)
-		var aitag: String = "" if cid == _player else "  · " + String(_clans[cid].get("ai", ""))
-		draw_string(_font, Vector2(sx + 38, cy + 48), "%d prov%s" % [_count(cid), aitag], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, C_GOLD)
+		var aitag: String = "" if cid == _player else "  · " + String(_clans[cid].get("persona", ""))
+		var dtag: String = "  · ⚑%d" % _daimyo_count(cid) if alive else ""
+		draw_string(_font, Vector2(sx + 38, cy + 48), "%d prov%s%s" % [_count(cid), dtag, aitag], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, C_GOLD)
 
 
 func _draw_shield() -> void:
@@ -1157,6 +1437,8 @@ func _draw_buttons() -> void:
 			_add_button("diff_" + d, Rect2(bx, 504, 130, 40), dn[d], true, _difficulty == d)
 			bx += 142.0
 		_add_button("begin_campaign", Rect2(540, 564, 200, 48), "Begin Campaign →", true, true)
+		if _has_save():
+			_add_button("continue", Rect2(540, 624, 200, 38), "Continue saved game", true, false)
 	elif _game_over:
 		_add_button("newgame", Rect2(1040, 560, 210, 44), "New game", true, true)
 	elif _stage == Stage.ALLOCATE and not _auto:
@@ -1180,8 +1462,11 @@ func _draw_buttons() -> void:
 		_add_button("begin_war", Rect2((1280 - pw2) * 0.5 + pw2 - 170, (720 - ph2) * 0.5 + ph2 - 46, 150, 34), "Begin war →", true, true)
 	elif _stage == Stage.WAR and _active() == _player and _modal == null:
 		if _ninja_holder == _player and not _ninja_used:
-			var lbl := "Ninja: pick target" if _ninja_arm else "Send ninja ⚔"
-			_add_button("ninja_arm", Rect2(1040, 70, 210, 36), lbl, true, _ninja_arm)
+			var albl := "Pick a foe" if _ninja_arm else "Strike ⚔"
+			_add_button("ninja_arm", Rect2(1040, 70, 103, 36), albl, true, _ninja_arm)
+			var slbl := "Pick a foe" if _ninja_spy_arm else "Spy"
+			_add_button("ninja_spy", Rect2(1147, 70, 103, 36), slbl, true, _ninja_spy_arm)
+		_add_button("save_game", Rect2(1040, 612, 210, 30), "Save game", true, false)
 		if _war_sub == War.DEPLOY:
 			_head("UNIT GUIDE — %s" % _type_name(_deploy_type), Vector2(1042, 130), 13, C_GOLD)
 			var dy := 150.0
@@ -1279,7 +1564,7 @@ func _draw_help() -> void:
 			ly += 15.0
 		ly += 5.0
 	ly += 2.0
-	var flow := "Each round: bid koku for turn order and the ninja, then a levy budget. The ninja holder may attempt one assassination (d12 of 8 or less) on any enemy province. In battle: Archers & Gunners fire first (ranged), then Samurai, Ronin, Ashigaru & the castle garrison clash (melee). Win by holding 10 provinces, or being the last clan standing."
+	var flow := "Each round: bid koku for turn order and the ninja, then a levy budget. The ninja holder gets ONE act per round — either ASSASSINATE an enemy province (d12 of 8 or less kills a defender) or SPY on one (reveal its hidden troop makeup). Enemy unit composition stays fogged until you scout it; only the total is visible. In battle: Archers & Gunners fire first (ranged), then Samurai, Ronin, Ashigaru & the castle garrison clash (melee). In the Maneuver phase, select one of your armies and hover an enemy border to read your ATTACK ODDS — green is favorable, amber even, red risky. A clan is also eliminated the instant it loses its LAST daimyō (⚑ count is shown under each clan) — its provinces pass to the slayer, so guard your generals and hunt theirs. Win by holding 10 provinces, or being the last clan standing."
 	for line in _wrap(flow, w - 60, 12):
 		draw_string(_font, Vector2(lx, ly), line, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, C_STEEL)
 		ly += 15.0
@@ -1317,7 +1602,7 @@ func _draw_menu() -> void:
 		qy += 21.0
 	_text_centered("— Sun Tzu, The Art of War", Vector2(640, qy + 4), 12, C_GOLD)
 	_head_centered("KNOW YOUR ENEMY", Vector2(640, 488), 13, C_STEEL)
-	_text_centered("Click ? at any time for the field guide.", Vector2(640, 624), 12, C_STEEL)
+	_text_centered("Click ? at any time for the field guide.", Vector2(640, 694), 12, C_STEEL)
 
 
 # ---------------------------------------------------------------- data + dev
@@ -1347,6 +1632,8 @@ func _load_data() -> void:
 	_player = data.get("player", "A")
 	_clans = {}
 	var ai_levels := {"B": "hard", "C": "medium", "D": "medium", "E": "easy"}
+	# Fixed per-clan personality so rivals are recognizable game to game (orthogonal to difficulty).
+	var personas := {"B": "aggressive", "C": "economic", "D": "defensive", "E": "opportunist"}
 	for cid in data.get("clans", {}).keys():
 		var c: Dictionary = data["clans"][cid]
 		var col: Array = c["color"]
@@ -1356,6 +1643,7 @@ func _load_data() -> void:
 			"color": Color(col[0], col[1], col[2]),
 			"tint": Color(tnt[0], tnt[1], tnt[2]),
 			"ai": ai_levels.get(cid, "medium"),
+			"persona": personas.get(cid, "opportunist"),
 		}
 	_provinces = {}
 	for pid in data.get("provinces", {}).keys():
@@ -1373,6 +1661,96 @@ func _load_data() -> void:
 			"owner": p.get("owner"), "units": units, "army": n, "daimyo": 0,
 			"castle": int(p.get("castle", 0)), "adj": p.get("adj", []),
 		}
+
+
+## ---------------------------------------------------------------- save / load
+
+func _has_save() -> bool:
+	return FileAccess.file_exists(SAVE_PATH)
+
+
+## Writes the full dynamic game state to user:// as JSON. Static structure (province
+## polygons, adjacency, clan colours) is NOT saved — it is rebuilt from provinces.json on
+## load and the saved owners/units/castles/daimyō are overlaid on top.
+func _save_game() -> void:
+	var prov := {}
+	for pid in _provinces:
+		var p: Dictionary = _provinces[pid]
+		prov[pid] = {"owner": p["owner"], "units": (p["units"] as Dictionary).duplicate(), "castle": int(p["castle"]), "daimyo": int(p["daimyo"])}
+	var ai := {}
+	for cid in _clans:
+		ai[cid] = {"ai": _clans[cid].get("ai", "medium"), "persona": _clans[cid].get("persona", "opportunist")}
+	var data := {
+		"v": 1, "round": _round, "player": _player, "stage": _stage, "war_idx": _war_idx,
+		"war_sub": _war_sub, "deploy_koku": _deploy_koku, "deploy_type": _deploy_type,
+		"ninja_holder": _ninja_holder, "ninja_used": _ninja_used, "difficulty": _difficulty,
+		"game_over": _game_over, "result": _result, "order": _order, "koku": _koku,
+		"alloc": _alloc, "scouted": _scouted, "events": _events, "moved": _moved,
+		"selected": _selected, "provinces": prov, "clans_ai": ai,
+	}
+	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+	if f == null:
+		_log("Could not write the save file.")
+		return
+	f.store_string(JSON.stringify(data))
+	f.close()
+	_log("Campaign saved — choose Continue from the title to resume.")
+
+
+func _load_game() -> void:
+	if not _has_save():
+		return
+	var f := FileAccess.open(SAVE_PATH, FileAccess.READ)
+	if f == null:
+		return
+	var parsed: Variant = JSON.parse_string(f.get_as_text())
+	f.close()
+	if typeof(parsed) != TYPE_DICTIONARY:
+		return
+	var d: Dictionary = parsed
+	_load_data()  # rebuild polys/centroids/clans + default units
+	var ai: Dictionary = d.get("clans_ai", {})
+	for cid in ai:
+		if _clans.has(cid):
+			_clans[cid]["ai"] = String(ai[cid].get("ai", "medium"))
+			_clans[cid]["persona"] = String(ai[cid].get("persona", "opportunist"))
+	var prov: Dictionary = d.get("provinces", {})
+	for pid in prov:
+		if not _provinces.has(pid):
+			continue
+		var sp: Dictionary = prov[pid]
+		_provinces[pid]["owner"] = sp.get("owner")
+		var u: Dictionary = sp.get("units", {})
+		for k in UNIT_KEYS:
+			_provinces[pid]["units"][k] = int(u.get(k, 0))
+		_provinces[pid]["castle"] = int(sp.get("castle", 0))
+		_provinces[pid]["daimyo"] = int(sp.get("daimyo", 0))
+		_sync(_provinces[pid])
+	_round = int(d.get("round", 1))
+	_player = String(d.get("player", "A"))
+	_stage = int(d.get("stage", Stage.WAR))
+	_war_idx = int(d.get("war_idx", 0))
+	_war_sub = int(d.get("war_sub", War.DEPLOY))
+	_deploy_koku = int(d.get("deploy_koku", 0))
+	_deploy_type = String(d.get("deploy_type", "ash"))
+	_ninja_holder = String(d.get("ninja_holder", ""))
+	_ninja_used = bool(d.get("ninja_used", false))
+	_difficulty = String(d.get("difficulty", "normal"))
+	_game_over = bool(d.get("game_over", false))
+	_result = String(d.get("result", ""))
+	_order = d.get("order", [])
+	_koku = d.get("koku", {})
+	_alloc = d.get("alloc", {})
+	_scouted = d.get("scouted", {})
+	_events = d.get("events", [])
+	_moved = d.get("moved", {})
+	_selected = String(d.get("selected", ""))
+	_ninja_arm = false
+	_ninja_spy_arm = false
+	_modal = null
+	_dirty_odds()
+	_log("Campaign resumed.")
+	queue_redraw()
 
 
 func _run_autoplay() -> void:
