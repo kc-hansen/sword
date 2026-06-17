@@ -5,7 +5,13 @@
 This is the living growth plan: everything on the table for making Sengoku deeper, smarter,
 and more beautiful. It's roughly ordered by impact, not commitment — pick what's fun.
 
-## Where we are now (v1.3)
+## Where we are now (v1.4)
+**New in v1.4:** **Kyoto, the imperial capital** — hold Yamashiro for bonus koku and a lower victory
+bar (fewer provinces needed while you keep it), marked with a gold imperial chrysanthemum. The **AI
+is smarter**: rivals gang up on whoever's in the lead, defend their fronts with a proper garrison
+(no more stripping provinces bare), and fight over the capital — so games are genuinely contested.
+
+## Where we were at (v1.3)
 **New in v1.3:** **armored unit figures** — click any province to muster its troops and see them as
 samurai, ashigaru, archers, gunners, ronin and the daimyō (with crested helmets, weapons and
 banners). The map's army markers are now clan **war-standards** (gold fortress rings, daimyō crests,

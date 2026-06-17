@@ -24,6 +24,9 @@ const DESIGN_H := 760.0
 const TOP_BAR := 56.0
 const BOTTOM_BAR := 64.0
 const WIN_PROV := 24
+const CAPITAL := "yamashiro"        # Kyoto — the imperial capital
+const CAPITAL_KOKU := 4             # bonus income for holding the capital
+const CAPITAL_WIN_DISCOUNT := 6     # provinces fewer needed to win while you hold Kyoto
 const NINJA_SUCCESS := 8
 
 enum Stage { MENU, ALLOCATE, REVEAL, WAR }
@@ -395,6 +398,33 @@ func _take_all_but_one(p: Dictionary) -> Dictionary:
 	return committed
 
 
+## Commits the strongest [param n] units of [param p] as an attack force, leaving the rest
+## (the weakest, as a holding garrison) behind. Used by AI that keeps a reserve.
+func _take_force(p: Dictionary, n: int) -> Dictionary:
+	var force := _new_comp()
+	var u: Dictionary = p["units"]
+	var need := n
+	for k in ["ron", "sam", "gun", "arc", "ash"]:
+		while need > 0 and int(u[k]) > 0:
+			u[k] -= 1
+			force[k] += 1
+			need -= 1
+	_sync(p)
+	return force
+
+
+## The strongest single enemy army that could strike [param pid] — what its owner must hold against.
+func _threat(pid: String, cid: String) -> int:
+	var p: Dictionary = _provinces[pid]
+	var t := 0
+	for aid in p["adj"]:
+		if _provinces.has(aid):
+			var ao = _provinces[aid].get("owner")
+			if ao != null and ao != cid:
+				t = maxi(t, _army(_provinces[aid]) + int(_provinces[aid]["castle"]))
+	return t
+
+
 func _assign_starting_daimyo() -> void:
 	for cid in _clans:
 		var owned := _owned(cid)
@@ -423,6 +453,8 @@ func _begin_round() -> void:
 			# so a leader can't runaway-snowball quite so hard.
 			var pc := _count(cid)
 			_koku[cid] = max(3, pc + int(pc / 3) - int(maxi(0, pc - 14) / 3))
+			if _provinces.has(CAPITAL) and _provinces[CAPITAL].get("owner") == cid:
+				_koku[cid] += CAPITAL_KOKU  # the imperial capital enriches its holder
 	_alloc = {}
 	for cid in _clans:
 		if _count(cid) > 0 and cid != _player:
@@ -894,32 +926,57 @@ func _ai_deploy(cid: String, koku: int) -> void:
 			break
 
 
+## The clan currently holding the most provinces — the one rivals should gang up on.
+func _leader() -> String:
+	var best := ""
+	var bn := -1
+	for cid in _clans:
+		var c := _count(cid)
+		if c > bn:
+			bn = c
+			best = cid
+	return best
+
+
 func _ai_maneuver(cid: String) -> void:
+	# Coalition: when one clan is clearly ahead, smarter rivals focus fire on it instead of
+	# letting it snowball. Easy AI doesn't coordinate; hard AI ganging is strongest.
+	var leader := _leader()
+	var coalition := 0
+	if cid != leader and _count(leader) > _count(cid) + 2:
+		coalition = int({"hard": 6, "medium": 4, "easy": 0}.get(_clans[cid].get("ai", "medium"), 4))
 	for pid in _owned(cid):
 		var p: Dictionary = _provinces[pid]
 		if _army(p) < 2 or _moved.has(pid):
 			continue
-		var committed: int = _army(p) - 1
-		# Aggression blends difficulty + personality; a daimyō leading demands an extra
-		# margin, since losing the last general ends the clan.
-		var need: int = _aggr_for(cid) + (2 if int(p["daimyo"]) > 0 else 0)
+		var is_dai := int(p["daimyo"]) > 0
+		# Keep a holding garrison sized to the biggest enemy that could strike here, so the AI
+		# doesn't strip a front-line (or daimyō) province bare to attack elsewhere.
+		var keep: int = clampi(int(round(_threat(pid, cid) * 0.42)) + (2 if is_dai else 0), 0, _army(p) - 2)
+		var committed: int = _army(p) - keep
+		var need: int = _aggr_for(cid) + (2 if is_dai else 0)
 		var best := ""
 		var best_score := -9999
-		for aid in p["adj"]:
-			if not _provinces.has(aid):
-				continue
-			var ap: Dictionary = _provinces[aid]
-			if ap.get("owner") == cid:
-				continue
-			var defv: int = _army(ap) + int(ap["castle"]) * 2
-			var margin: int = committed - defv
-			# Hunt enemy daimyō: a viable strike that also fells a general is worth more.
-			var score: int = margin + (3 if int(ap.get("daimyo", 0)) > 0 else 0)
-			if margin >= need and score > best_score:
-				best_score = score
-				best = aid
+		if committed >= 2:
+			for aid in p["adj"]:
+				if not _provinces.has(aid):
+					continue
+				var ap: Dictionary = _provinces[aid]
+				if ap.get("owner") == cid:
+					continue
+				var defv: int = _army(ap) + int(ap["castle"]) * 2
+				var margin: int = committed - defv
+				# Hunt enemy daimyō, and pile onto the leader's lands when one is running away.
+				var score: int = margin + (3 if int(ap.get("daimyo", 0)) > 0 else 0)
+				if ap.get("owner") == leader:
+					score += coalition
+				if aid == CAPITAL:
+					score += 8  # everyone covets Kyoto — draws the war to the centre
+				if margin >= need and score > best_score:
+					best_score = score
+					best = aid
 		if best != "":
-			var force := _take_all_but_one(p)
+			var force := _take_force(p, committed)
 			var src_dai := int(p["daimyo"])
 			p["daimyo"] = 0
 			_resolve_battle(pid, best, force, src_dai)
@@ -927,15 +984,22 @@ func _ai_maneuver(cid: String) -> void:
 			if _count(_player) == 0:
 				return
 		elif not _is_border(pid):
+			# Safe interior province: march its troops to the most threatened friendly border.
+			var dest := ""
+			var dest_threat := -1
 			for aid in p["adj"]:
 				if _provinces.has(aid) and _provinces[aid].get("owner") == cid and _is_border(aid):
-					var force2 := _take_all_but_one(p)
-					var tgt: Dictionary = _provinces[aid]
-					for k in UNIT_KEYS:
-						tgt["units"][k] += int(force2[k])
-					_sync(tgt)
-					_moved[pid] = true
-					break
+					var th := _threat(aid, cid) - _army(_provinces[aid])
+					if th > dest_threat:
+						dest_threat = th
+						dest = aid
+			if dest != "":
+				var force2 := _take_all_but_one(p)
+				var tgt: Dictionary = _provinces[dest]
+				for k in UNIT_KEYS:
+					tgt["units"][k] += int(force2[k])
+				_sync(tgt)
+				_moved[pid] = true
 
 
 func _check_victory() -> void:
@@ -950,7 +1014,9 @@ func _check_victory() -> void:
 	for cid in _clans:
 		if _count(cid) > 0:
 			alive += 1
-	if _count(_player) >= WIN_PROV or alive == 1:
+	var has_capital: bool = _provinces.has(CAPITAL) and _provinces[CAPITAL].get("owner") == _player
+	var win_need := WIN_PROV - (CAPITAL_WIN_DISCOUNT if has_capital else 0)
+	if _count(_player) >= win_need or alive == 1:
 		_game_over = true
 		_result = "Victory"
 		_log("Japan bows before the %s clan. You are Shogun!" % _clan_name(_player))
@@ -1386,6 +1452,8 @@ func _draw() -> void:
 		if tot <= 0:
 			continue
 		_draw_army_token(p2, p2["centroid"])
+	if _provinces.has(CAPITAL):
+		_draw_capital_marker(_provinces[CAPITAL]["centroid"])
 
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)  # leave map view — UI below is screen-space
 	# Province name on hover (replaces the old always-on labels — too dense at 72).
@@ -1452,6 +1520,16 @@ func _draw_army_token(p2: Dictionary, cen: Vector2) -> void:
 		var dom := _dominant_unit(p2)
 		if dom != "":
 			_draw_unit_icon(dom, cen + Vector2(-10.5, 11.0), 5.0, Color(0.95, 0.93, 0.88, 0.92))
+
+
+## Gold imperial chrysanthemum, marking Kyoto — the capital prize.
+func _draw_capital_marker(cen: Vector2) -> void:
+	var c := cen + Vector2(0, -23.0)
+	for i in 16:
+		var a := i * PI / 8.0
+		draw_line(c + Vector2(cos(a), sin(a)) * 3.0, c + Vector2(cos(a), sin(a)) * 7.0, C_GOLD, 2.0)
+	draw_circle(c, 3.6, C_GOLD)
+	draw_circle(c, 1.8, C_PANEL)
 
 
 func _draw_marker(pos: Vector2, enemy: bool, band: String = "") -> void:
@@ -1534,7 +1612,7 @@ func _draw_side_panel() -> void:
 			if int(p["daimyo"]) > 0:
 				roster.append(["dai", int(p["daimyo"])])
 		var rows := 1 if (fogged or roster.size() == 0) else (roster.size() + 2) / 3
-		var ph := 108.0 + rows * 62.0
+		var ph := 108.0 + rows * 62.0 + (14.0 if _selected == CAPITAL else 0.0)
 		_panel(Rect2(x, y, 250, ph), C_PANEL, C_IRON, 1.0, 12.0)
 		_head("MUSTER", Vector2(x + 14, y + 24), 11, C_STEEL)
 		_head(String(p["name"]), Vector2(x + 14, y + 52), 21, C_PARCH)
@@ -1547,7 +1625,9 @@ func _draw_side_panel() -> void:
 		var ctxt: String = ("Castle Lv %d (+%d)" % [cl, cl * 2]) if cl > 0 else "No castle"
 		var dtxt: String = ("   ⚑ Daimyō Lv %d" % int(p["daimyo"])) if int(p["daimyo"]) > 0 else ""
 		draw_string(_font, Vector2(x + 14, y + 95), "Army %d   ·   %s%s" % [_army(p), ctxt, dtxt], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, C_STEEL)
-		var ry := y + 104.0
+		if _selected == CAPITAL:
+			draw_string(_font_head, Vector2(x + 14, y + 110), "✦ Imperial Capital · Kyoto", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, C_GOLD)
+		var ry := y + (118.0 if _selected == CAPITAL else 104.0)
 		if fogged:
 			for i in 3:
 				_draw_unit_figure("ash", Vector2(x + 46 + i * 62, ry + 30), 40, Color(0.18, 0.19, 0.22))
@@ -1806,7 +1886,7 @@ func _draw_help() -> void:
 			ly += 15.0
 		ly += 5.0
 	ly += 2.0
-	var flow := "Each round: bid koku for turn order and the ninja, then a levy budget. The ninja holder gets ONE act per round — either ASSASSINATE an enemy province (d12 of 8 or less kills a defender) or SPY on one (reveal its hidden troop makeup). Enemy unit composition stays fogged until you scout it; only the total is visible. In battle: Archers & Gunners fire first (ranged), then Samurai, Ronin, Ashigaru & the castle garrison clash (melee). In the Maneuver phase, select one of your armies and hover an enemy border to read your ATTACK ODDS — green is favorable, amber even, red risky. A clan is also eliminated the instant it loses its LAST daimyō (⚑ count is shown under each clan) — its provinces pass to the slayer, so guard your generals and hunt theirs. Win by holding 10 provinces, or being the last clan standing."
+	var flow := "Each round: bid koku for turn order and the ninja, then a levy budget. The ninja holder gets ONE act per round — either ASSASSINATE an enemy province (d12 of 8 or less kills a defender) or SPY on one (reveal its hidden troop makeup). Enemy unit composition stays fogged until you scout it; only the total is visible. In battle: Archers & Gunners fire first (ranged), then Samurai, Ronin, Ashigaru & the castle garrison clash (melee). In the Maneuver phase, select one of your armies and hover an enemy border to read your ATTACK ODDS — green is favorable, amber even, red risky. A clan is also eliminated the instant it loses its LAST daimyō (⚑ count is shown under each clan) — its provinces pass to the slayer, so guard your generals and hunt theirs. Hold the ✦ Imperial Capital (Kyoto) for bonus koku — and the throne needs fewer provinces while you keep it. Win by holding %d provinces (only %d with Kyoto), or being the last clan standing." % [WIN_PROV, WIN_PROV - CAPITAL_WIN_DISCOUNT]
 	for line in _wrap(flow, w - 60, 12):
 		draw_string(_font, Vector2(lx, ly), line, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, C_STEEL)
 		ly += 15.0
