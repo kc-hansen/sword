@@ -141,6 +141,7 @@ var _zoom: float = 1.0
 var _focus: Vector2 = Vector2.ZERO
 var _map_rect: Rect2 = Rect2()
 var _panning: bool = false
+var _dbg_figures: bool = false
 var _rng := RandomNumberGenerator.new()
 var _t := 0.0
 var _roll_t := -1.0
@@ -228,6 +229,24 @@ func _ready() -> void:
 		var ok: bool = int(_provinces[home]["castle"]) == 3 and int(_provinces[home]["units"]["sam"]) == 9 and _round == 7 and _scouted.has(enemy) and _stage == Stage.WAR
 		print("SAVELOAD test: ok=%s castle=%d sam=%d round=%d scouted=%s stage=%d" % [ok, int(_provinces[home]["castle"]), int(_provinces[home]["units"]["sam"]), _round, _scouted.has(enemy), _stage])
 		get_tree().quit()
+		return
+	if "--shotfigures" in args:
+		_dbg_figures = true
+		await _shoot()
+		return
+	if "--shotmuster" in args:
+		_order = _clans.keys()
+		_war_idx = _order.find(_player)
+		_stage = Stage.WAR
+		_war_sub = War.MANEUVER
+		_selected = _owned(_player)[0]
+		_provinces[_selected]["units"] = {"ash": 4, "arc": 2, "gun": 1, "sam": 3, "ron": 1}
+		_provinces[_selected]["daimyo"] = 2
+		_sync(_provinces[_selected])
+		_zoom = 2.2
+		_focus = _provinces[_selected]["centroid"]
+		_clamp_focus()
+		await _shoot()
 		return
 	if "--shotzoom" in args:
 		_order = _clans.keys()
@@ -400,7 +419,10 @@ func _begin_round() -> void:
 	_log("Sun Tzu — \"%s\"" % AOW_ROUND[(_round - 1) % AOW_ROUND.size()])
 	for cid in _clans:
 		if _count(cid) > 0:
-			_koku[cid] = max(3, _count(cid) + int(_count(cid) / 2))
+			# Income grows with provinces but with diminishing returns past a mid-size empire,
+			# so a leader can't runaway-snowball quite so hard.
+			var pc := _count(cid)
+			_koku[cid] = max(3, pc + int(pc / 3) - int(maxi(0, pc - 14) / 3))
 	_alloc = {}
 	for cid in _clans:
 		if _count(cid) > 0 and cid != _player:
@@ -1216,7 +1238,85 @@ func _draw_unit_icon(t: String, c: Vector2, s: float, col: Color) -> void:
 				draw_rect(Rect2(c.x + dx, c.y - s * 0.6, s * 0.3, s * 0.35), col, true)
 
 
+## Draws an armored samurai-era figure of height [param s], centered at [param c], with
+## [param accent] as the clan/armour colour. Each unit type gets a distinct helmet + weapon.
+func _draw_unit_figure(t: String, c: Vector2, s: float, accent: Color) -> void:
+	var dark := Color(0.118, 0.125, 0.149)
+	var armor := Color(0.196, 0.208, 0.239)
+	var skin := Color(0.847, 0.725, 0.588)
+	var steel := Color(0.620, 0.659, 0.722)
+	var wood := Color(0.471, 0.349, 0.224)
+	var top := c.y - s * 0.5
+	var mx := c.x
+	var sh := top + s * 0.32       # shoulder line
+	var hip := top + s * 0.64
+	var foot := top + s * 0.99
+	var hy := top + s * 0.17       # head centre
+	# weapon drawn behind the body for some types
+	if t == "ash":  # yari (long spear) behind right shoulder
+		draw_line(Vector2(mx + s * 0.30, foot), Vector2(mx + s * 0.30, top - s * 0.18), wood, maxf(1.5, s * 0.05))
+		draw_colored_polygon(PackedVector2Array([Vector2(mx + s * 0.30, top - s * 0.30), Vector2(mx + s * 0.22, top - s * 0.10), Vector2(mx + s * 0.38, top - s * 0.10)]), steel)
+	elif t == "arc":  # yumi (tall asymmetric bow) behind
+		draw_arc(Vector2(mx - s * 0.34, c.y - s * 0.05), s * 0.62, -PI * 0.42, PI * 0.42, 14, wood, maxf(1.5, s * 0.05))
+		draw_line(Vector2(mx - s * 0.34 + s * 0.62 * cos(-PI * 0.42), c.y - s * 0.05 + s * 0.62 * sin(-PI * 0.42)), Vector2(mx - s * 0.34 + s * 0.62 * cos(PI * 0.42), c.y - s * 0.05 + s * 0.62 * sin(PI * 0.42)), Color(0.85, 0.84, 0.80), maxf(1.0, s * 0.02))
+	# ---- legs (armored)
+	draw_line(Vector2(mx - s * 0.11, hip), Vector2(mx - s * 0.15, foot), dark, maxf(2.0, s * 0.11))
+	draw_line(Vector2(mx + s * 0.11, hip), Vector2(mx + s * 0.15, foot), dark, maxf(2.0, s * 0.11))
+	# ---- torso (dō chest armour), trapezoid
+	draw_colored_polygon(PackedVector2Array([Vector2(mx - s * 0.23, sh), Vector2(mx + s * 0.23, sh), Vector2(mx + s * 0.19, hip), Vector2(mx - s * 0.19, hip)]), armor)
+	draw_colored_polygon(PackedVector2Array([Vector2(mx - s * 0.15, sh + s * 0.04), Vector2(mx + s * 0.15, sh + s * 0.04), Vector2(mx + s * 0.12, hip - s * 0.02), Vector2(mx - s * 0.12, hip - s * 0.02)]), accent)
+	for i in 3:  # lamellar bands
+		var ly := sh + s * 0.10 + i * s * 0.10
+		draw_line(Vector2(mx - s * 0.17, ly), Vector2(mx + s * 0.17, ly), Color(0, 0, 0, 0.45), maxf(1.0, s * 0.02))
+	# ---- shoulder guards (sode)
+	draw_rect(Rect2(mx - s * 0.33, sh - s * 0.01, s * 0.13, s * 0.17), armor, true)
+	draw_rect(Rect2(mx + s * 0.20, sh - s * 0.01, s * 0.13, s * 0.17), armor, true)
+	draw_rect(Rect2(mx - s * 0.33, sh - s * 0.01, s * 0.13, s * 0.17), Color(0, 0, 0, 0.4), false, maxf(1.0, s * 0.02))
+	draw_rect(Rect2(mx + s * 0.20, sh - s * 0.01, s * 0.13, s * 0.17), Color(0, 0, 0, 0.4), false, maxf(1.0, s * 0.02))
+	# ---- head + helmet
+	draw_circle(Vector2(mx, hy), s * 0.115, skin)
+	match t:
+		"ash", "gun":  # jingasa (conical foot-soldier hat)
+			draw_colored_polygon(PackedVector2Array([Vector2(mx - s * 0.22, hy - s * 0.02), Vector2(mx + s * 0.22, hy - s * 0.02), Vector2(mx, hy - s * 0.22)]), dark)
+		"ron":  # bare head + topknot (no helmet)
+			draw_circle(Vector2(mx, hy - s * 0.10), s * 0.045, dark)
+		_:  # kabuto helmet (samurai, archer, daimyō)
+			draw_circle(Vector2(mx, hy - s * 0.02), s * 0.135, armor)
+			draw_colored_polygon(PackedVector2Array([Vector2(mx - s * 0.16, hy + s * 0.04), Vector2(mx + s * 0.16, hy + s * 0.04), Vector2(mx + s * 0.12, hy + s * 0.13), Vector2(mx - s * 0.12, hy + s * 0.13)]), armor)  # shikoro neck guard
+	# crest (maedate) — kuwagata horns for samurai, golden crescent for daimyō
+	if t == "sam":
+		draw_line(Vector2(mx - s * 0.04, hy - s * 0.10), Vector2(mx - s * 0.16, hy - s * 0.28), C_GOLD, maxf(1.5, s * 0.035))
+		draw_line(Vector2(mx + s * 0.04, hy - s * 0.10), Vector2(mx + s * 0.16, hy - s * 0.28), C_GOLD, maxf(1.5, s * 0.035))
+	elif t == "dai":
+		draw_arc(Vector2(mx, hy - s * 0.16), s * 0.17, PI * 1.15, TAU * 0.92, 14, C_GOLD, maxf(2.0, s * 0.05))
+	# ---- foreground weapons / banners
+	match t:
+		"sam":  # katana at the hip
+			draw_line(Vector2(mx + s * 0.18, hip - s * 0.02), Vector2(mx + s * 0.40, hip + s * 0.18), steel, maxf(1.5, s * 0.045))
+			draw_line(Vector2(mx + s * 0.13, hip - s * 0.06), Vector2(mx + s * 0.20, hip + s * 0.00), dark, maxf(1.5, s * 0.05))
+		"gun":  # matchlock held across the body
+			draw_line(Vector2(mx - s * 0.30, sh + s * 0.20), Vector2(mx + s * 0.34, sh + s * 0.02), wood, maxf(1.8, s * 0.06))
+			draw_line(Vector2(mx + s * 0.34, sh + s * 0.02), Vector2(mx + s * 0.42, sh - s * 0.01), dark, maxf(1.2, s * 0.03))
+		"ron":  # daishō — two swords at the side
+			draw_line(Vector2(mx + s * 0.16, hip - s * 0.04), Vector2(mx + s * 0.42, hip + s * 0.14), steel, maxf(1.4, s * 0.04))
+			draw_line(Vector2(mx + s * 0.18, hip + s * 0.02), Vector2(mx + s * 0.36, hip + s * 0.20), Color(0.78, 0.80, 0.84), maxf(1.2, s * 0.03))
+		"dai":  # sashimono back-banner + gunbai war fan
+			draw_rect(Rect2(mx - s * 0.40, top + s * 0.02, s * 0.12, s * 0.40), accent, true)
+			draw_rect(Rect2(mx - s * 0.40, top + s * 0.02, s * 0.12, s * 0.40), C_GOLD, false, maxf(1.0, s * 0.02))
+			draw_circle(Vector2(mx + s * 0.34, sh + s * 0.06), s * 0.10, C_GOLD)
+			draw_line(Vector2(mx + s * 0.24, sh + s * 0.14), Vector2(mx + s * 0.34, sh + s * 0.06), dark, maxf(1.5, s * 0.04))
+
+
 func _draw() -> void:
+	if _dbg_figures:
+		draw_rect(Rect2(0, 0, 1280, 720), Color(0.105, 0.125, 0.157), true)
+		var types := ["ash", "arc", "gun", "sam", "ron", "dai"]
+		var names := {"ash": "Ashigaru", "arc": "Archer", "gun": "Gunner", "sam": "Samurai", "ron": "Ronin", "dai": "Daimyō"}
+		for i in types.size():
+			var fx := 150.0 + i * 165.0
+			_draw_unit_figure(types[i], Vector2(fx, 330), 200, _clans[_player]["color"])
+			_head_centered(names[types[i]], Vector2(fx, 470), 20, C_PARCH)
+		return
 	if _stage == Stage.MENU:
 		_draw_menu()
 		_draw_buttons()
@@ -1285,19 +1385,7 @@ func _draw() -> void:
 		var tot := _army(p2)
 		if tot <= 0:
 			continue
-		var cen: Vector2 = p2["centroid"]
-		var ring := C_GOLD if int(p2["castle"]) >= 2 else C_PANEL
-		draw_circle(cen + Vector2(0, 1), 13.0, Color(0, 0, 0, 0.35))
-		draw_circle(cen, 12.0, _owner_color(p2))
-		draw_arc(cen, 12.0, 0.0, TAU, 24, ring, 2.0, true)
-		draw_arc(cen, 8.5, 0.0, TAU, 18, Color(1, 1, 1, 0.10), 1.0, true)
-		_text_centered(str(tot), cen + Vector2(0, 4), 12, C_WHITE)
-		if int(p2["castle"]) > 0:
-			draw_rect(Rect2(cen.x + 9, cen.y - 17, 8, 8), _owner_color(p2), true)
-			draw_rect(Rect2(cen.x + 9, cen.y - 17, 8, 8), C_GOLD, false, 1.0)
-		if int(p2.get("daimyo", 0)) > 0:
-			draw_circle(cen + Vector2(-13, -14), 7.5, C_GOLD)
-			_text_centered(str(int(p2["daimyo"])), cen + Vector2(-13, -10), 11, C_PANEL)
+		_draw_army_token(p2, p2["centroid"])
 
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)  # leave map view — UI below is screen-space
 	# Province name on hover (replaces the old always-on labels — too dense at 72).
@@ -1325,6 +1413,45 @@ func _draw() -> void:
 		_draw_gameover()
 	if _show_help:
 		_draw_help()
+
+
+func _dominant_unit(p: Dictionary) -> String:
+	var best := ""
+	var bn := 0
+	for k in UNIT_KEYS:
+		var n := int(p["units"][k])
+		if n > bn:
+			bn = n
+			best = k
+	return best
+
+
+## A clan army standard: count disc, gold fortress ring + tower for castles, a gold crescent
+## crest for a daimyō, and (zoomed in) the dominant unit type.
+func _draw_army_token(p2: Dictionary, cen: Vector2) -> void:
+	var tot := _army(p2)
+	var oc := _owner_color(p2)
+	var castle := int(p2["castle"])
+	var dai := int(p2.get("daimyo", 0))
+	draw_circle(cen + Vector2(0, 1.5), 13.0, Color(0, 0, 0, 0.40))
+	draw_circle(cen, 12.0, oc)
+	draw_arc(cen, 12.0, 0.0, TAU, 26, Color(0, 0, 0, 0.55), 1.6, true)
+	draw_arc(cen, 8.6, 0.0, TAU, 20, Color(1, 1, 1, 0.12), 1.0, true)
+	if castle >= 2:
+		draw_arc(cen, 13.8, 0.0, TAU, 28, C_GOLD, 1.6, true)
+	_text_centered(str(tot), cen + Vector2(0, 4), 13, C_WHITE)
+	if castle > 0:
+		var tc := cen + Vector2(10.0, -11.0)
+		draw_rect(Rect2(tc.x - 4, tc.y - 1, 8, 7), C_PANEL, true)
+		draw_rect(Rect2(tc.x - 4, tc.y - 1, 8, 7), C_GOLD, false, 1.0)
+		for dx in [-4.0, 0.0, 3.0]:
+			draw_rect(Rect2(tc.x + dx, tc.y - 4, 2.5, 3), C_GOLD, true)
+	if dai > 0:
+		draw_arc(cen + Vector2(0, -13.5), 6.0, PI * 1.12, TAU * 0.94, 12, C_GOLD, 2.2, true)
+	if _zoom >= 2.3:
+		var dom := _dominant_unit(p2)
+		if dom != "":
+			_draw_unit_icon(dom, cen + Vector2(-10.5, 11.0), 5.0, Color(0.95, 0.93, 0.88, 0.92))
 
 
 func _draw_marker(pos: Vector2, enemy: bool, band: String = "") -> void:
@@ -1393,28 +1520,50 @@ func _draw_top_bar() -> void:
 func _draw_side_panel() -> void:
 	var x := 14.0
 	var y := TOP_BAR + 12.0
+	var ly := y  # where DISPATCHES starts (below the muster panel if a province is selected)
 	if _selected != "" and _provinces.has(_selected):
 		var p: Dictionary = _provinces[_selected]
-		_panel(Rect2(x, y, 250, 150), C_PANEL, C_IRON, 1.0, 12.0)
-		_head("SELECTED PROVINCE", Vector2(x + 14, y + 24), 11, C_STEEL)
-		_head(String(p["name"]), Vector2(x + 14, y + 54), 22, C_PARCH)
 		var owner = p.get("owner")
+		var accent: Color = _owner_color(p)
+		var fogged := _is_fogged(_selected)
+		var roster := []
+		if not fogged:
+			for k in UNIT_KEYS:
+				if int(p["units"][k]) > 0:
+					roster.append([k, int(p["units"][k])])
+			if int(p["daimyo"]) > 0:
+				roster.append(["dai", int(p["daimyo"])])
+		var rows := 1 if (fogged or roster.size() == 0) else (roster.size() + 2) / 3
+		var ph := 108.0 + rows * 62.0
+		_panel(Rect2(x, y, 250, ph), C_PANEL, C_IRON, 1.0, 12.0)
+		_head("MUSTER", Vector2(x + 14, y + 24), 11, C_STEEL)
+		_head(String(p["name"]), Vector2(x + 14, y + 52), 21, C_PARCH)
 		var oname := "Unclaimed"
 		if owner != null:
 			oname = _clans[owner]["name"] + (" (you)" if owner == _player else " clan")
-		if int(p["daimyo"]) > 0:
-			oname += "  ·  ⚑ Daimyō Lv %d" % int(p["daimyo"])
-		draw_rect(Rect2(x + 14, y + 66, 14, 14), _owner_color(p), true)
-		draw_string(_font, Vector2(x + 34, y + 78), oname, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, C_PARCH)
+		draw_rect(Rect2(x + 14, y + 64, 13, 13), accent, true)
+		draw_string(_font, Vector2(x + 33, y + 75), oname, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, C_PARCH)
 		var cl := int(p["castle"])
-		var castle_txt: String = ("Lv %d · +%d garrison" % [cl, cl * 2]) if cl > 0 else "none"
-		draw_string(_font, Vector2(x + 14, y + 102), "Army %d    Castle: %s" % [_army(p), castle_txt], HORIZONTAL_ALIGNMENT_LEFT, -1, 13, C_PARCH)
-		if _is_fogged(_selected):
-			draw_string(_font, Vector2(x + 14, y + 126), "Composition hidden — send your ninja to scout", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, C_REDLT)
+		var ctxt: String = ("Castle Lv %d (+%d)" % [cl, cl * 2]) if cl > 0 else "No castle"
+		var dtxt: String = ("   ⚑ Daimyō Lv %d" % int(p["daimyo"])) if int(p["daimyo"]) > 0 else ""
+		draw_string(_font, Vector2(x + 14, y + 95), "Army %d   ·   %s%s" % [_army(p), ctxt, dtxt], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, C_STEEL)
+		var ry := y + 104.0
+		if fogged:
+			for i in 3:
+				_draw_unit_figure("ash", Vector2(x + 46 + i * 62, ry + 30), 40, Color(0.18, 0.19, 0.22))
+				_head_centered("?", Vector2(x + 46 + i * 62, ry + 14), 18, C_REDLT)
+			draw_string(_font, Vector2(x + 14, ry + 58), "Composition hidden — spy to reveal", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, C_REDLT)
+		elif roster.size() == 0:
+			draw_string(_font, Vector2(x + 14, ry + 24), "No troops garrisoned.", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, C_STEEL)
 		else:
-			draw_string(_font, Vector2(x + 14, y + 126), _comp_str(p), HORIZONTAL_ALIGNMENT_LEFT, -1, 11, C_STEEL)
-	var ly := y + 164.0
-	_panel(Rect2(x, ly, 250, 140), C_PANEL, C_IRON, 1.0, 12.0)
+			for i in roster.size():
+				var fx := x + 26 + (i % 3) * 74.0
+				var fy := ry + 28 + int(i / 3) * 62.0
+				_draw_unit_figure(String(roster[i][0]), Vector2(fx, fy), 44, accent)
+				var lbl: String = ("Lv %d" % int(roster[i][1])) if String(roster[i][0]) == "dai" else ("×%d" % int(roster[i][1]))
+				_text_centered(lbl, Vector2(fx, fy + 33), 12, C_PARCH)
+		ly = y + ph + 12.0
+	_panel(Rect2(x, ly, 250, 132), C_PANEL, C_IRON, 1.0, 12.0)
 	_head("DISPATCHES", Vector2(x + 14, ly + 22), 11, C_STEEL)
 	var ey := ly + 42.0
 	for e in _events:

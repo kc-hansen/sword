@@ -5,7 +5,14 @@
 This is the living growth plan: everything on the table for making Sengoku deeper, smarter,
 and more beautiful. It's roughly ordered by impact, not commitment — pick what's fun.
 
-## Where we are now (v1.2)
+## Where we are now (v1.3)
+**New in v1.3:** **armored unit figures** — click any province to muster its troops and see them as
+samurai, ashigaru, archers, gunners, ronin and the daimyō (with crested helmets, weapons and
+banners). The map's army markers are now clan **war-standards** (gold fortress rings, daimyō crests,
+and the dominant unit type shown when you zoom in), plus a balance pass (diminishing income, tougher
+neutral provinces).
+
+## Where we were at (v1.2)
 **New in v1.2:** the map is now the **real geography of Japan** — actual coastline and province
 borders (46 provinces with Sengoku-era names), **terrain relief** (mountains/hills), **bright
 clan-coloured territories** over the land, and **zoom + pan** (scroll to zoom, right-drag to pan,
